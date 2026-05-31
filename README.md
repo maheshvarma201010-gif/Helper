@@ -1,21 +1,29 @@
-# Ultimate Telegram File Sequencer & Replace Bot
+# Ultimate Telegram File Sequencer & Search Bot
 
-A professional, production-ready Telegram bot for sequencing files and replacing text across message ranges.
+A professional, production-ready Telegram bot for sequencing files, bulk text replacement (Userbot-powered), and advanced channel indexing/searching.
 
 ## Features
 
+- **Advanced Search**: Index entire channels using a Userbot and search with fuzzy matching.
+- **Quality Grouping**: Search results are automatically grouped by quality (480p, 720p, 1080p, 2160p).
+- **Batch Links**: Generates batch links for indexed series and episodes.
+- **Userbot Replacement**: Bulk replace text, links, and usernames across channels using a Userbot.
 - **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode.
-- **Bulk Replace**: Replace text, links, and button URLs across a range of messages.
-- **Asynchronous**: Built with Pyrogram and Motor for high performance.
-- **Database Support**: Uses MongoDB for persistence.
-- **Production Ready**: Dockerized and optimized for Render deployment.
+- **Production Ready**: Asynchronous architecture, MongoDB persistence, and Dockerized.
+- **Health Check**: Built-in HTTP server for deployment platforms like Render.
 
 ## Commands
 
+### User Commands
 - `/start` - Get started and see available commands.
+- `/search <query>` - Search indexed content (e.g., `/search Naruto S01`).
 - `/sequence` - Enter collection mode to send files for sorting.
-- `/replace` - Start the step-by-step text replacement workflow.
-- `/done` - Finish file collection in sequence mode.
+- `/replace` - Start the bulk text/link replacement workflow.
+
+### Admin Commands
+- `/setchannel <id>` - Set the source channel for indexing.
+- `/setbot <username>` - Set the batch bot username for search links.
+- `/reindex` - Scan or rescan the source channel for content.
 
 ## Environment Variables
 
@@ -23,41 +31,23 @@ A professional, production-ready Telegram bot for sequencing files and replacing
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
 - `MONGO_URI`: Your MongoDB Connection String.
-- `LOG_CHANNEL`: ID of the channel for logs.
+- `STRING_SESSION`: Pyrogram String Session for the Userbot.
 - `OWNER_ID`: Your Telegram User ID.
-- `PORT`: Port for the health check server (default: 8080).
-- `REPLACE_TEXT_CHANNELS`: Comma-separated list of channel IDs authorized for text replacement.
+- `ADMINS`: Comma-separated list of authorized Admin IDs.
+- `LOG_CHANNEL`: ID of the channel for logs.
+- `PORT`: Port for health check (default: 8080).
+- `REPLACE_TEXT_CHANNELS`: Comma-separated list of authorized channel IDs for replacement.
 
-## Features
-- **Health Check**: Built-in HTTP server for deployment platforms like Render.
-- **Channel Security**: Only allows text replacement in specified channels.
+## Deployment on Render
 
 1. **Fork** this repository.
-2. Create a **MongoDB** database (e.g., on MongoDB Atlas).
-3. Get your **Telegram credentials** from [my.telegram.org](https://my.telegram.org).
-4. Create a **Render account**.
-5. Create a new **Web Service** (or Worker) on Render.
-6. Connect your **GitHub repository**.
-7. Configure the **Environment Variables** in the Render dashboard.
-8. **Deploy** the service.
+2. Create a **MongoDB** database.
+3. Get a **String Session** for your user account.
+4. Create a new **Web Service** on Render.
+5. Connect your repository and configure the environment variables.
+6. The bot will automatically start the health check server on the assigned port.
 
-## Local Usage
+## Sorting & Search Logic
 
-1. Clone the repository.
-2. Install dependencies: `pip install -r requirements.txt`.
-3. Create a `.env` file based on `.env.example`.
-4. Run the bot: `python -m bot.bot`.
-
-## Docker Usage
-
-1. Build the image: `docker build -t telegram-bot .`.
-2. Run the container: `docker run --env-file .env telegram-bot`.
-
-## Sorting Rules
-
-The bot sorts files based on:
-1. **Season** (Ascending)
-2. **Quality** (240p to 2160p)
-3. **Episode** (Ascending)
-
-Metadata is extracted from captions first, then filenames as a fallback.
+The bot extracts metadata (Season, Episode, Quality) using optimized regex and groups search results by quality with priority: `480p > 720p > 1080p > 2160p`.
+The `/replace` command uses the Userbot client to allow edits in restricted channels or where the bot itself lacks permissions.

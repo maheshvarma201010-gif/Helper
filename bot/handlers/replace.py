@@ -3,7 +3,7 @@ import logging
 from pyrogram import Client, filters, errors, enums
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link
-from bot.utils.replacer import replace_in_html, replace_in_buttons
+from bot.utils.replacer import replace_in_html, replace_in_buttons, render_message_to_html
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ async def replace_command(client, message):
     await db.update_user_state(user_id, "awaiting_first_link")
     await message.reply_text("Send FIRST message link.")
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "done"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "done", "search", "setchannel", "setbot", "reindex"]))
 async def handle_replace_workflow(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -72,27 +72,35 @@ async def start_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
+    worker = client.userbot or client
+
     try:
-        test_msg = await client.send_message(chat_id, "⚙️ **Verifying bot permissions...**")
+        test_msg = await worker.send_message(chat_id, "⚙️ **Verifying Userbot permissions...**")
         await test_msg.delete()
     except Exception as e:
-        return await message.reply_text(f"❌ Error verifying permissions: {e}")
+        return await message.reply_text(f"❌ Error verifying Userbot permissions: {e}")
 
-    await message.reply_text(f"✅ Starting replacement: `{old_text}` -> `{new_text}`...")
+    await message.reply_text(f"✅ Starting replacement using Userbot: `{old_text}` -> `{new_text}`...")
 
     count = 0
     for i in range(first_id, last_id + 1, 100):
         batch_ids = list(range(i, min(i + 100, last_id + 1)))
         try:
-            messages = await client.get_messages(chat_id, batch_ids)
+            messages = await worker.get_messages(chat_id, batch_ids)
             if not isinstance(messages, list): messages = [messages]
 
             for msg in messages:
                 if not msg or msg.empty: continue
 
                 changed = False
-                # Use HTML to preserve formatting and allow URL replacement
-                current_html = msg.text.html if msg.text else (msg.caption.html if msg.caption else "")
+
+                # Manual rendering to HTML because Pyrogram Message object doesn't have .html
+                if msg.text:
+                    current_html = render_message_to_html(msg.text, msg.entities)
+                elif msg.caption:
+                    current_html = render_message_to_html(msg.caption, msg.caption_entities)
+                else:
+                    current_html = ""
 
                 if old_text in current_html:
                     new_html = replace_in_html(current_html, old_text, new_text)
@@ -110,20 +118,20 @@ async def start_replacement(client, message, user_id):
                 if changed:
                     try:
                         if msg.text:
-                            await client.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                            await worker.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
                         else:
-                            await client.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                            await worker.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
                         count += 1
                         await asyncio.sleep(1)
                     except errors.FloodWait as e:
                         await asyncio.sleep(e.value)
-                        if msg.text: await client.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
-                        else: await client.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                        if msg.text: await worker.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                        else: await worker.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
                         count += 1
                     except errors.MessageNotModified: pass
                     except Exception as e: logger.error(f"Edit failed {msg.id}: {e}")
         except Exception as e: logger.error(f"Batch failed: {e}")
 
-    await message.reply_text(f"🏁 Replacement complete! Modified {count} messages.")
+    await message.reply_text(f"🏁 Replacement complete via Userbot! Modified {count} messages.")
     await db.clear_replace_data(user_id)
     await db.update_user_state(user_id, None)

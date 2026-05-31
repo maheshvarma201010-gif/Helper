@@ -11,6 +11,13 @@ class Database:
         self.sequences = self.db["sequences"]
         self.replace_jobs = self.db["replace_jobs"]
 
+        # New collections for Userbot and Search
+        self.settings = self.db["settings"]
+        self.channels = self.db["channels"]
+        self.indexes = self.db["indexes"]
+        self.search_cache = self.db["search_cache"]
+        self.batches = self.db["batches"]
+
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
 
@@ -25,13 +32,40 @@ class Database:
         user = await self.users.find_one({"user_id": user_id})
         return user.get("state") if user else None
 
-    # Sequence Job Methods
-    async def add_sequence_file(self, user_id, file_data):
-        await self.sequences.update_one(
-            {"user_id": user_id},
-            {"$push": {"files": file_data}},
+    # Settings and Channels
+    async def set_source_channel(self, channel_id):
+        await self.settings.update_one({"key": "source_channel"}, {"$set": {"value": channel_id}}, upsert=True)
+
+    async def get_source_channel(self):
+        setting = await self.settings.find_one({"key": "source_channel"})
+        return setting["value"] if setting else None
+
+    async def set_batch_bot(self, username):
+        await self.settings.update_one({"key": "batch_bot"}, {"$set": {"value": username}}, upsert=True)
+
+    async def get_batch_bot(self):
+        setting = await self.settings.find_one({"key": "batch_bot"})
+        return setting["value"] if setting else None
+
+    # Indexing
+    async def add_index(self, data):
+        # Unique index on message_id and chat_id
+        await self.indexes.update_one(
+            {"chat_id": data["chat_id"], "message_id": data["message_id"]},
+            {"$set": data},
             upsert=True
         )
+
+    async def get_latest_indexed_id(self, chat_id):
+        latest = await self.indexes.find_one({"chat_id": chat_id}, sort=[("message_id", -1)])
+        return latest["message_id"] if latest else 0
+
+    async def search_index(self, query_filter):
+        return await self.indexes.find(query_filter).to_list(length=1000)
+
+    # Sequence and Replace methods (preserving existing logic)
+    async def add_sequence_file(self, user_id, file_data):
+        await self.sequences.update_one({"user_id": user_id}, {"$push": {"files": file_data}}, upsert=True)
 
     async def get_sequence_files(self, user_id):
         job = await self.sequences.find_one({"user_id": user_id})
@@ -40,13 +74,8 @@ class Database:
     async def clear_sequence_files(self, user_id):
         await self.sequences.delete_one({"user_id": user_id})
 
-    # Replace Job Methods
     async def update_replace_data(self, user_id, data):
-        await self.replace_jobs.update_one(
-            {"user_id": user_id},
-            {"$set": data},
-            upsert=True
-        )
+        await self.replace_jobs.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
 
     async def get_replace_data(self, user_id):
         return await self.replace_jobs.find_one({"user_id": user_id})
