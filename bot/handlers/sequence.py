@@ -27,7 +27,7 @@ async def collect_files(client, message: Message):
         caption = message.caption or ""
 
         # Extract metadata
-        season, episode, quality = get_metadata(caption, filename)
+        season, episode, quality, title = get_metadata(caption, filename)
 
         file_data = {
             "message_id": message.id,
