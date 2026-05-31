@@ -38,6 +38,10 @@ async def handle_replace_workflow(client, message):
 
     elif state == "awaiting_last_link":
         replace_data = await db.get_replace_data(user_id)
+        if not replace_data:
+            await db.update_user_state(user_id, None)
+            return await message.reply_text("Session expired. Please start over with /replace")
+
         chat_id, msg_id = parse_message_link(message.text)
         if not chat_id or chat_id != replace_data.get("chat_id"):
             return await message.reply_text("Invalid link or link from different chat. Please send a valid message link from the same chat.")
@@ -57,7 +61,10 @@ async def handle_replace_workflow(client, message):
 
 async def start_replacement(client, message, user_id):
     data = await db.get_replace_data(user_id)
-    if not data:
+    if not data or "chat_id" not in data or "first_msg_id" not in data or "last_msg_id" not in data or "old_text" not in data or "new_text" not in data:
+        await message.reply_text("Incomplete data. Please start over with /replace")
+        await db.clear_replace_data(user_id)
+        await db.update_user_state(user_id, None)
         return
 
     chat_id = data["chat_id"]
@@ -66,7 +73,16 @@ async def start_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
-    await message.reply_text(f"Starting replacement from {first_id} to {last_id} in {chat_id}...")
+    # Admin check - send test message
+    try:
+        test_msg = await client.send_message(chat_id, "⚙️ Verification: Bot is preparing for bulk replacement...")
+        await test_msg.delete()
+    except errors.ChatAdminRequired:
+        return await message.reply_text("❌ Error: I am not an admin in that channel or I don't have permission to post/delete messages.")
+    except Exception as e:
+        return await message.reply_text(f"❌ Error verifying permissions: {e}")
+
+    await message.reply_text(f"✅ Permissions verified. Starting replacement from {first_id} to {last_id} in {chat_id}...")
 
     count = 0
     # Process in batches of 100
