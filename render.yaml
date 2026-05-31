@@ -1,9 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-file-sequencer
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python -m bot.bot
+    plan: free
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -13,7 +14,15 @@ services:
         sync: false
       - key: MONGO_URI
         sync: false
+      - key: STRING_SESSION
+        sync: false
       - key: LOG_CHANNEL
         sync: false
       - key: OWNER_ID
+        sync: false
+      - key: ADMINS
+        sync: false
+      - key: PORT
+        sync: false
+      - key: REPLACE_TEXT_CHANNELS
         sync: false

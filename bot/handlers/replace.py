@@ -72,15 +72,17 @@ async def start_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
-    worker = client.userbot or client
+    # Use Userbot for replacement if active, otherwise Bot
+    worker = client.userbot if (hasattr(client, "userbot") and client.userbot and client.userbot.is_connected) else client
+    worker_name = "Userbot" if worker == getattr(client, "userbot", None) else "Bot"
 
     try:
-        test_msg = await worker.send_message(chat_id, "⚙️ **Verifying Userbot permissions...**")
+        test_msg = await worker.send_message(chat_id, f"⚙️ **Verifying {worker_name} permissions...**")
         await test_msg.delete()
     except Exception as e:
-        return await message.reply_text(f"❌ Error verifying Userbot permissions: {e}")
+        return await message.reply_text(f"❌ Error verifying {worker_name} permissions: {e}")
 
-    await message.reply_text(f"✅ Starting replacement using Userbot: `{old_text}` -> `{new_text}`...")
+    await message.reply_text(f"✅ Starting replacement using {worker_name}: `{old_text}` -> `{new_text}`...")
 
     count = 0
     for i in range(first_id, last_id + 1, 100):
@@ -93,8 +95,6 @@ async def start_replacement(client, message, user_id):
                 if not msg or msg.empty: continue
 
                 changed = False
-
-                # Manual rendering to HTML because Pyrogram Message object doesn't have .html
                 if msg.text:
                     current_html = render_message_to_html(msg.text, msg.entities)
                 elif msg.caption:
@@ -132,6 +132,6 @@ async def start_replacement(client, message, user_id):
                     except Exception as e: logger.error(f"Edit failed {msg.id}: {e}")
         except Exception as e: logger.error(f"Batch failed: {e}")
 
-    await message.reply_text(f"🏁 Replacement complete via Userbot! Modified {count} messages.")
+    await message.reply_text(f"🏁 Replacement complete via {worker_name}! Modified {count} messages.")
     await db.clear_replace_data(user_id)
     await db.update_user_state(user_id, None)
