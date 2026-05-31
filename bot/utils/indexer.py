@@ -19,11 +19,8 @@ async def index_channel(userbot, chat_id, progress_msg=None):
                 filename = getattr(file_obj, "file_name", "Unknown")
                 caption = message.caption or ""
 
-                # We use the same parser logic as sequencing
-                # but we might want a 'title' extraction too.
-                # For now, let's assume the caption/filename starts with the title.
-                title = caption.split('\n')[0] if caption else filename
-                season, episode, quality = get_metadata(caption, filename)
+                # Enhanced metadata extraction
+                season, episode, quality, title = get_metadata(caption, filename)
 
                 index_data = {
                     "chat_id": chat_id,
@@ -39,7 +36,10 @@ async def index_channel(userbot, chat_id, progress_msg=None):
                 count += 1
 
                 if count % 100 == 0 and progress_msg:
-                    await progress_msg.edit_text(f"Indexing in progress...\nMessages processed: {count}")
+                    try:
+                        await progress_msg.edit_text(f"Indexing in progress...\nMessages processed: {count}")
+                    except:
+                        pass
 
         return count
     except Exception as e:
