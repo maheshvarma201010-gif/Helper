@@ -1,8 +1,12 @@
 import asyncio
+import logging
 from pyrogram import Client, filters, errors
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link
 from bot.utils.replacer import replace_text, replace_in_buttons
+from bot.config import Config
+
+logger = logging.getLogger(__name__)
 
 @Client.on_message(filters.command("replace") & filters.private)
 async def replace_command(client, message):
@@ -23,6 +27,11 @@ async def handle_replace_workflow(client, message):
         chat_id, msg_id = parse_message_link(message.text)
         if not chat_id:
             return await message.reply_text("Invalid link. Please send a valid message link.")
+
+        # Channel restriction check
+        if Config.REPLACE_TEXT_CHANNELS and chat_id not in Config.REPLACE_TEXT_CHANNELS:
+            return await message.reply_text("This channel is not authorized for text replacement.")
+
         await db.update_replace_data(user_id, {"chat_id": chat_id, "first_msg_id": msg_id})
         await db.update_user_state(user_id, "awaiting_last_link")
         await message.reply_text("Send LAST message link.")
@@ -32,6 +41,7 @@ async def handle_replace_workflow(client, message):
         chat_id, msg_id = parse_message_link(message.text)
         if not chat_id or chat_id != replace_data.get("chat_id"):
             return await message.reply_text("Invalid link or link from different chat. Please send a valid message link from the same chat.")
+
         await db.update_replace_data(user_id, {"last_msg_id": msg_id})
         await db.update_user_state(user_id, "awaiting_old_text")
         await message.reply_text("Which text should be replaced?")
@@ -56,10 +66,10 @@ async def start_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
-    await message.reply_text(f"Starting replacement from {first_id} to {last_id}...")
+    await message.reply_text(f"Starting replacement from {first_id} to {last_id} in {chat_id}...")
 
     count = 0
-    # Process in batches of 100 for efficiency
+    # Process in batches of 100
     for i in range(first_id, last_id + 1, 100):
         batch_ids = list(range(i, min(i + 100, last_id + 1)))
         try:
@@ -93,8 +103,9 @@ async def start_replacement(client, message, user_id):
                         else:
                             await client.edit_message_caption(chat_id, msg.id, new_msg_text, reply_markup=new_reply_markup)
                         count += 1
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(1) # Base sleep
                     except errors.FloodWait as e:
+                        logger.warning(f"FloodWait: {e.value} seconds")
                         await asyncio.sleep(e.value)
                         # Retry
                         if msg.text:
@@ -102,10 +113,12 @@ async def start_replacement(client, message, user_id):
                         else:
                             await client.edit_message_caption(chat_id, msg.id, new_msg_text, reply_markup=new_reply_markup)
                         count += 1
+                    except errors.MessageNotModified:
+                        pass
                     except Exception as e:
-                        print(f"Failed to edit {msg.id}: {e}")
+                        logger.error(f"Failed to edit {msg.id}: {e}")
         except Exception as e:
-             print(f"Error processing batch: {e}")
+             logger.error(f"Error processing batch starting at {i}: {e}")
 
     await message.reply_text(f"Replacement complete! Modified {count} messages.")
     await db.clear_replace_data(user_id)

@@ -25,8 +25,12 @@ A professional, production-ready Telegram bot for sequencing files and replacing
 - `MONGO_URI`: Your MongoDB Connection String.
 - `LOG_CHANNEL`: ID of the channel for logs.
 - `OWNER_ID`: Your Telegram User ID.
+- `PORT`: Port for the health check server (default: 8080).
+- `REPLACE_TEXT_CHANNELS`: Comma-separated list of channel IDs authorized for text replacement.
 
-## Deployment on Render
+## Features
+- **Health Check**: Built-in HTTP server for deployment platforms like Render.
+- **Channel Security**: Only allows text replacement in specified channels.
 
 1. **Fork** this repository.
 2. Create a **MongoDB** database (e.g., on MongoDB Atlas).

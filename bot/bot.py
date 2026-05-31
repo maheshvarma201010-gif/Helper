@@ -1,5 +1,7 @@
 import logging
+import asyncio
 from pyrogram import Client
+from aiohttp import web
 from bot.config import Config
 
 # Configure logging
@@ -8,6 +10,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+async def health_check(request):
+    return web.Response(text="Bot is running!")
 
 class Bot(Client):
     def __init__(self):
@@ -23,6 +28,15 @@ class Bot(Client):
         await super().start()
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
+
+        # Start Health Check Server
+        app = web.Application()
+        app.router.add_get("/", health_check)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", Config.PORT)
+        await site.start()
+        logger.info(f"Health check server started on port {Config.PORT}")
 
     async def stop(self, *args):
         await super().stop()
