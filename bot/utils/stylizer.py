@@ -76,23 +76,47 @@ def stylize_text(text, style):
     if not text or not style or style == "normal":
         return text
 
-    # Regex to identify HTML tags, URLs, and HTML entities
-    # We want to keep these parts UNSTYLIZED
-    pattern = r'(<[^>]+>|https?://[^\s<>"]+|&[a-zA-Z0-9#]+;)'
+    # We need to track if we are inside an <a> tag to avoid double-wrapping links
+    in_anchor = False
 
-    parts = re.split(pattern, text)
+    # Regex to identify HTML tags and HTML entities
+    tag_entity_pattern = r'(<[^>]+>|&[a-zA-Z0-9#]+;)'
+
+    parts = re.split(tag_entity_pattern, text)
     result = []
+
     for part in parts:
         if not part:
             continue
 
-        # Check if part matches the unstylized pattern
-        if re.match(pattern, part):
+        # Check if it's a tag or entity
+        if part.startswith('<') and part.endswith('>'):
+            lower_part = part.lower()
+            if lower_part.startswith('<a ') or lower_part == '<a>':
+                in_anchor = True
+            elif lower_part == '</a>':
+                in_anchor = False
+            result.append(part)
+        elif part.startswith('&') and part.endswith(';'):
+            # It's an HTML entity, keep it as is
             result.append(part)
         else:
-            # Stylize only the actual text content
-            stylized_part = "".join(get_char(c, style) for c in part)
-            result.append(stylized_part)
+            # It's plain text content
+            if in_anchor:
+                # Already inside a link, just stylize characters
+                result.append("".join(get_char(c, style) for c in part))
+            else:
+                # Outside a link, look for naked URLs to stylize and wrap
+                url_pattern = r'(https?://[^\s<>"]+)'
+                url_parts = re.split(url_pattern, part)
+                for u_part in url_parts:
+                    if re.match(url_pattern, u_part):
+                        # Stylize URL characters and wrap in <a> tag to keep it clickable
+                        stylized_url = "".join(get_char(c, style) for c in u_part)
+                        result.append(f'<a href="{u_part}">{stylized_url}</a>')
+                    else:
+                        # Standard text, just stylize
+                        result.append("".join(get_char(c, style) for c in u_part))
 
     return "".join(result)
 

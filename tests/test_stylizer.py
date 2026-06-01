@@ -43,9 +43,9 @@ def test_stylize_url_and_entities_preservation():
     result = stylize_text(text, "bold")
     # Verify 'Check' is stylized
     assert "𝐂𝐡𝐞𝐜𝐤" in result
-    # Verify URL is NOT stylized
-    assert "https://example.com" in result
-    assert "𝐡𝐭𝐭𝐩𝐬" not in result
+    # Verify URL is stylized but wrapped in <a> tag to stay clickable
+    assert '<a href="https://example.com">' in result
+    assert "𝐡𝐭𝐭𝐩𝐬://𝐞𝐱𝐚𝐦𝐩𝐥𝐞.𝐜𝐨𝐦" in result
 
     text_with_entity = "A &amp; B"
     result = stylize_text(text_with_entity, "bold")
@@ -54,3 +54,11 @@ def test_stylize_url_and_entities_preservation():
     assert "𝐁" in result
     assert "&amp;" in result
     assert "&𝐚𝐦𝐩;" not in result
+
+def test_stylize_nested_links():
+    text = 'Visit <a href="https://google.com">Google</a> now'
+    result = stylize_text(text, "bold")
+    assert "𝐕𝗶𝐬𝗶𝐭" in result or "𝐕𝐢𝐬𝐢𝐭" in result
+    assert '<a href="https://google.com">' in result
+    assert "𝐆𝐨𝐨𝐠𝐥𝐞" in result
+    assert "𝐧𝐨𝐰" in result
