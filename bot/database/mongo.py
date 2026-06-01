@@ -18,6 +18,7 @@ class Database:
         self.indexes = self.db["indexes"]
         self.search_cache = self.db["search_cache"]
         self.batches = self.db["batches"]
+        self.fonts = self.db["fonts"]
 
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
@@ -100,5 +101,20 @@ class Database:
 
     async def clear_replace_data(self, user_id):
         await self.replace_jobs.delete_one({"user_id": user_id})
+
+    # Font Settings
+    async def set_channel_font(self, channel_id, font_style):
+        await self.fonts.update_one(
+            {"channel_id": channel_id},
+            {"$set": {"font_style": font_style}},
+            upsert=True
+        )
+
+    async def get_channel_font(self, channel_id):
+        data = await self.fonts.find_one({"channel_id": channel_id})
+        return data["font_style"] if data else None
+
+    async def delete_channel_font(self, channel_id):
+        await self.fonts.delete_one({"channel_id": channel_id})
 
 db = Database()

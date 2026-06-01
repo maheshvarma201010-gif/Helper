@@ -34,7 +34,7 @@ class Bot(Client):
                     api_id=Config.API_ID,
                     api_hash=Config.API_HASH,
                     session_string=Config.STRING_SESSION,
-                    no_updates=True
+                    no_updates=False # Changed to False to allow Userbot to handle updates if needed
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize Userbot: {e}")

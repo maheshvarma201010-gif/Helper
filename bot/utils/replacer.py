@@ -9,16 +9,20 @@ def replace_text(text, old_text, new_text):
         return text
     return text.replace(old_text, new_text)
 
-def replace_in_buttons(reply_markup, old_text, new_text):
+def replace_in_buttons(reply_markup, old_text, new_text, stylize_font=None):
     """Correctly replaces text and URLs in InlineKeyboardMarkup buttons."""
     if not reply_markup or not isinstance(reply_markup, InlineKeyboardMarkup):
         return reply_markup
+
+    from bot.utils.stylizer import stylize_text
 
     new_rows = []
     for row in reply_markup.inline_keyboard:
         new_row = []
         for button in row:
             new_btn_text = replace_text(button.text, old_text, new_text)
+            if stylize_font:
+                new_btn_text = stylize_text(new_btn_text, stylize_font)
 
             if button.url:
                 new_url = replace_text(button.url, old_text, new_text)

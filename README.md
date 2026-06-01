@@ -21,6 +21,8 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 - `/replace` - Start the bulk text/link replacement workflow.
 - `/replace_domain` - Perform domain-wide replacement (Owner only).
 - `/cancel_replace` - Cancel an active domain replacement task.
+- `/font <channel_id>` - Apply a Unicode font style to existing messages.
+- `/fontchannel <channel_id>` - Set a default Unicode font for a channel.
 
 ### Admin Commands
 - `/setchannel <id>` - Set the source channel for indexing.
