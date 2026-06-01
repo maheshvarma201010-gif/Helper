@@ -76,14 +76,21 @@ def stylize_text(text, style):
     if not text or not style or style == "normal":
         return text
 
-    # Regex to keep HTML tags intact
-    # We split by HTML tags, stylize the text parts, and join them back
-    parts = re.split(r'(<[^>]+>)', text)
+    # Regex to identify HTML tags, URLs, and HTML entities
+    # We want to keep these parts UNSTYLIZED
+    pattern = r'(<[^>]+>|https?://[^\s<>"]+|&[a-zA-Z0-9#]+;)'
+
+    parts = re.split(pattern, text)
     result = []
     for part in parts:
-        if part.startswith('<') and part.endswith('>'):
+        if not part:
+            continue
+
+        # Check if part matches the unstylized pattern
+        if re.match(pattern, part):
             result.append(part)
         else:
+            # Stylize only the actual text content
             stylized_part = "".join(get_char(c, style) for c in part)
             result.append(stylized_part)
 

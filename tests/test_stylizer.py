@@ -37,3 +37,20 @@ def test_stylize_special_chars():
     # Italic 'h' is 0x210E (ℎ)
     result = stylize_text("h", "italic")
     assert result == "ℎ"
+
+def test_stylize_url_and_entities_preservation():
+    text = "Check this: https://example.com & more!"
+    result = stylize_text(text, "bold")
+    # Verify 'Check' is stylized
+    assert "𝐂𝐡𝐞𝐜𝐤" in result
+    # Verify URL is NOT stylized
+    assert "https://example.com" in result
+    assert "𝐡𝐭𝐭𝐩𝐬" not in result
+
+    text_with_entity = "A &amp; B"
+    result = stylize_text(text_with_entity, "bold")
+    # Verify 'A' and 'B' are stylized but '&amp;' is NOT
+    assert "𝐀" in result
+    assert "𝐁" in result
+    assert "&amp;" in result
+    assert "&𝐚𝐦𝐩;" not in result

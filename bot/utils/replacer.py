@@ -45,7 +45,9 @@ def render_message_to_html(text, entities):
     Correctly handles nested entities by sorting by length and offset.
     """
     if not entities:
-        return html.escape(text)
+        # We need to escape special characters even if there are no entities
+        # to ensure it's valid HTML for the bot API
+        return html.escape(text).replace("&amp;amp;", "&amp;") # Prevent double escape if already escaped
 
     # Sort entities: primary by offset (ascending), secondary by length (descending)
     # This ensures parent tags wrap children correctly
