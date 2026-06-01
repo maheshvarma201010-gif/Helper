@@ -19,6 +19,8 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 - `/search <query>` - Search indexed content (e.g., `/search Naruto S01`).
 - `/sequence` - Enter collection mode to send files for sorting.
 - `/replace` - Start the bulk text/link replacement workflow.
+- `/replace_domain` - Perform domain-wide replacement (Owner only).
+- `/cancel_replace` - Cancel an active domain replacement task.
 
 ### Admin Commands
 - `/setchannel <id>` - Set the source channel for indexing.

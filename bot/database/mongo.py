@@ -10,6 +10,7 @@ class Database:
         self.jobs = self.db["jobs"]
         self.sequences = self.db["sequences"]
         self.replace_jobs = self.db["replace_jobs"]
+        self.domain_jobs = self.db["domain_jobs"]
 
         # New collections for Userbot and Search
         self.settings = self.db["settings"]
@@ -47,9 +48,26 @@ class Database:
         setting = await self.settings.find_one({"key": "batch_bot"})
         return setting["value"] if setting else None
 
+    # Global task lock for Domain Replacement
+    async def is_domain_job_running(self):
+        job = await self.settings.find_one({"key": "domain_job_active"})
+        return job["value"] if job else False
+
+    async def set_domain_job_status(self, status):
+        await self.settings.update_one({"key": "domain_job_active"}, {"$set": {"value": status}}, upsert=True)
+
+    # Domain Job Data
+    async def update_domain_data(self, user_id, data):
+        await self.domain_jobs.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
+
+    async def get_domain_data(self, user_id):
+        return await self.domain_jobs.find_one({"user_id": user_id})
+
+    async def clear_domain_data(self, user_id):
+        await self.domain_jobs.delete_one({"user_id": user_id})
+
     # Indexing
     async def add_index(self, data):
-        # Unique index on message_id and chat_id
         await self.indexes.update_one(
             {"chat_id": data["chat_id"], "message_id": data["message_id"]},
             {"$set": data},
@@ -63,7 +81,7 @@ class Database:
     async def search_index(self, query_filter):
         return await self.indexes.find(query_filter).to_list(length=1000)
 
-    # Sequence and Replace methods (preserving existing logic)
+    # Sequence and Replace methods
     async def add_sequence_file(self, user_id, file_data):
         await self.sequences.update_one({"user_id": user_id}, {"$push": {"files": file_data}}, upsert=True)
 
