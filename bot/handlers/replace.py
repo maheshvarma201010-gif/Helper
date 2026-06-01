@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import random
+import re
 from pyrogram import Client, filters, errors, enums
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
@@ -16,7 +16,7 @@ async def replace_command(client, message):
     await db.update_user_state(user_id, "awaiting_first_link")
     await message.reply_text("Send FIRST message link.")
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "done", "search", "setchannel", "setbot", "reindex", "verify"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "done", "search", "cancel", "setchannel", "setbot", "reindex", "verify"]))
 async def handle_replace_workflow(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -76,21 +76,13 @@ async def start_replacement(client, message, user_id):
     worker = client.userbot or client
     worker_name = "Userbot" if client.userbot else "Bot"
 
-    # Robust Chat Resolution
     try:
         chat = await resolve_chat(worker, chat_id)
-        chat_id = chat.id # Use resolved numeric ID
+        chat_id = chat.id
     except Exception as e:
-        return await message.reply_text(f"❌ Error resolving chat `{chat_id}`: {e}")
+        return await message.reply_text(f"❌ Error resolving chat: {e}")
 
-    # Admin check
-    try:
-        test_msg = await worker.send_message(chat_id, "⚙️ **Verifying permissions...**")
-        await test_msg.delete()
-    except Exception as e:
-        return await message.reply_text(f"❌ Error verifying {worker_name} permissions in {chat_id}: {e}")
-
-    await message.reply_text(f"✅ Starting replacement: `{old_text}` -> `{new_text}` in `{chat.title}`...")
+    await message.reply_text(f"✅ Starting replacement in `{chat.title}`\n🔄 `{old_text}` -> `{new_text}`...")
 
     count = 0
     for i in range(first_id, last_id + 1, 100):
@@ -102,7 +94,7 @@ async def start_replacement(client, message, user_id):
             for msg in messages:
                 if not msg or msg.empty: continue
 
-                # Extraction with entity rendering
+                # Get HTML with entities preserved
                 if msg.text:
                     current_html = render_message_to_html(msg.text, msg.entities)
                 elif msg.caption:
@@ -110,31 +102,16 @@ async def start_replacement(client, message, user_id):
                 else:
                     current_html = ""
 
-                # Check for match (case-insensitive search but case-sensitive replacement)
-                if old_text.lower() in current_html.lower():
-                    # We use regex or advanced string replace to handle potential case variations if needed,
-                    # but simple .replace is what was requested.
-                    new_html = replace_in_html(current_html, old_text, new_text)
-
-                    # If case-insensitive match found but exact match failed,
-                    # we might need to be smarter. For now, let's try to match exactly.
-                    if new_html == current_html:
-                         # Attempt case-insensitive replacement if exact failed but lowercase matched
-                         import re
-                         new_html = re.sub(re.escape(old_text), new_text, current_html, flags=re.IGNORECASE)
-
-                    changed = True
-                else:
-                    changed = False
+                # Perform Smart Replacement
+                new_html = replace_in_html(current_html, old_text, new_text)
 
                 new_reply_markup = None
                 if msg.reply_markup:
                     new_reply_markup = replace_in_buttons(msg.reply_markup, old_text, new_text)
-                    if new_reply_markup != msg.reply_markup:
-                        changed = True
 
-                if changed:
-                    # Retry logic with backoff
+                # Check if anything actually changed (HTML or Buttons)
+                if new_html != current_html or (msg.reply_markup and new_reply_markup != msg.reply_markup):
+                    # Retry logic
                     for attempt in range(3):
                         try:
                             if msg.text:
@@ -145,16 +122,15 @@ async def start_replacement(client, message, user_id):
                             await asyncio.sleep(0.5)
                             break
                         except errors.FloodWait as e:
-                            logger.warning(f"FloodWait: Sleeping for {e.value}s")
                             await asyncio.sleep(e.value + 1)
                         except errors.MessageNotModified:
                             break
                         except Exception as e:
-                            logger.error(f"Attempt {attempt+1} failed for {msg.id}: {e}")
-                            await asyncio.sleep(2 ** attempt)
+                            logger.error(f"Failed to edit {msg.id}: {e}")
+                            await asyncio.sleep(1)
 
         except Exception as e:
-            logger.error(f"Batch failed in {chat_id}: {e}")
+            logger.error(f"Batch failed: {e}")
 
     await message.reply_text(f"🏁 Replacement complete! Modified {count} messages.")
     await db.clear_replace_data(user_id)
