@@ -70,10 +70,7 @@ async def start_domain_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
-    worker = client.userbot or client
-    if not worker.is_connected:
-        return await message.reply_text("❌ Userbot is not connected. Task aborted.")
-
+    worker = client
     try:
         chat = await resolve_chat(worker, chat_id)
         chat_id = chat.id

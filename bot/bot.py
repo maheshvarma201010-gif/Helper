@@ -25,33 +25,10 @@ class Bot(Client):
             plugins=dict(root="bot/handlers")
         )
 
-        # Userbot (String Session) initialization
-        self.userbot = None
-        if Config.STRING_SESSION:
-            try:
-                self.userbot = Client(
-                    "userbot_session",
-                    api_id=Config.API_ID,
-                    api_hash=Config.API_HASH,
-                    session_string=Config.STRING_SESSION,
-                    no_updates=False # Changed to False to allow Userbot to handle updates if needed
-                )
-            except Exception as e:
-                logger.error(f"Failed to initialize Userbot: {e}")
-
     async def start(self):
         await super().start()
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
-
-        if self.userbot:
-            try:
-                await self.userbot.start()
-                user_me = await self.userbot.get_me()
-                logger.info(f"Userbot started as {user_me.first_name} (@{user_me.username or 'NoUsername'})")
-            except Exception as e:
-                logger.error(f"Failed to start Userbot: {e}")
-                self.userbot = None
 
         # Peer caching logic
         await self.cache_peers()
@@ -85,28 +62,8 @@ class Bot(Client):
             except Exception as e:
                 logger.warning(f"Bot could not cache chat {chat_id}: {e}")
 
-            # Cache for Userbot
-            if self.userbot:
-                try:
-                    await self.userbot.get_chat(chat_id)
-                    logger.info(f"Cached chat {chat_id} for Userbot")
-                except Exception as e:
-                    logger.warning(f"Userbot could not cache chat {chat_id}: {e}")
-
-        # Optional: Iterate through some dialogs to fill cache
-        try:
-            async for dialog in self.get_dialogs(limit=20):
-                pass
-            if self.userbot:
-                async for dialog in self.userbot.get_dialogs(limit=20):
-                    pass
-        except Exception as e:
-            logger.debug(f"Dialog caching skipped: {e}")
-
     async def stop(self, *args):
         await super().stop()
-        if self.userbot:
-            await self.userbot.stop()
         logger.info("Bot stopped.")
 
 if __name__ == "__main__":

@@ -73,9 +73,7 @@ async def start_replacement(client, message, user_id):
     old_text = data["old_text"]
     new_text = data["new_text"]
 
-    worker = client.userbot or client
-    worker_name = "Userbot" if client.userbot else "Bot"
-
+    worker = client
     try:
         chat = await resolve_chat(worker, chat_id)
         chat_id = chat.id

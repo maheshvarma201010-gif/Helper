@@ -12,7 +12,7 @@ async def set_channel_command(client, message):
     channel_id = message.command[1]
     try:
         # Try to resolve first to ensure access
-        worker = client.userbot or client
+        worker = client
         chat = await resolve_chat(worker, channel_id)
         await db.set_source_channel(chat.id)
         await message.reply_text(f"✅ Source channel updated to `{chat.title}` ({chat.id}) and cached.")
@@ -30,15 +30,12 @@ async def set_bot_command(client, message):
 
 @Client.on_message(filters.command("reindex") & filters.user(Config.ADMINS))
 async def reindex_command(client, message):
-    if not (hasattr(client, "userbot") and client.userbot and client.userbot.is_connected):
-        return await message.reply_text("❌ Userbot is not active.")
-
     source_id = await db.get_source_channel()
     if not source_id:
         return await message.reply_text("Source channel not set.")
 
     progress = await message.reply_text("Starting indexing...")
-    count = await index_channel(client.userbot, source_id, progress)
+    count = await index_channel(client, source_id, progress)
 
     if count >= 0:
         await progress.edit_text(f"Indexing complete! Added {count} messages.")
@@ -58,7 +55,7 @@ async def verify_command(client, message):
     msg = await message.reply_text("🔍 Verifying access...")
     results = ["**Verification Results:**"]
 
-    worker = client.userbot or client
+    worker = client
 
     for chat_id in set(channels):
         try:

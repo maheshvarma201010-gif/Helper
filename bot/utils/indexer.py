@@ -5,15 +5,15 @@ from bot.utils.parser import get_metadata
 
 logger = logging.getLogger(__name__)
 
-async def index_channel(userbot, chat_id, progress_msg=None):
+async def index_channel(client, chat_id, progress_msg=None):
     """
-    Indexes all messages in a channel using the userbot.
+    Indexes all messages in a channel using the bot.
     """
     try:
         latest_id = await db.get_latest_indexed_id(chat_id)
         count = 0
 
-        async for message in userbot.get_chat_history(chat_id, offset_id=latest_id, reverse=True):
+        async for message in client.get_chat_history(chat_id, offset_id=latest_id, reverse=True):
             if message.video or message.document or message.audio or message.animation:
                 file_obj = message.video or message.document or message.audio or message.animation
                 filename = getattr(file_obj, "file_name", "Unknown")

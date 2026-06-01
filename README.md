@@ -1,14 +1,15 @@
-# Ultimate Telegram File Sequencer & Search Bot
+# Ultimate Telegram File Sequencer & Replacement Bot (Bot-Only Version)
 
-A professional, production-ready Telegram bot for sequencing files, bulk text replacement (Userbot-powered), and advanced channel indexing/searching.
+A professional, production-ready Telegram bot for sequencing files, bulk text replacement, and advanced channel font styling. This version is optimized for stability and uses only the official Telegram Bot API (no Userbot required).
 
 ## Features
 
-- **Advanced Search**: Index entire channels using a Userbot and search with fuzzy matching.
-- **Quality Grouping**: Search results are automatically grouped by quality (480p, 720p, 1080p, 2160p).
-- **Batch Links**: Generates batch links for indexed series and episodes.
-- **Userbot Replacement**: Bulk replace text, links, and usernames across channels using a Userbot.
 - **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode.
+- **Bulk Replacement**: Replace text, links, and usernames across channels.
+- **Font Styling**:
+    - `/font <link>`: Apply Unicode font styles to a range of messages (e.g., `https://t.me/c/123/10-20`).
+    - `/fontchannel`: Set a default font for all new posts in a channel.
+- **Search & Indexing**: Index channels and search with fuzzy matching.
 - **Production Ready**: Asynchronous architecture, MongoDB persistence, and Dockerized.
 - **Health Check**: Built-in HTTP server for deployment platforms like Render.
 
@@ -16,18 +17,18 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 
 ### User Commands
 - `/start` - Get started and see available commands.
-- `/search <query>` - Search indexed content (e.g., `/search Naruto S01`).
+- `/search <query>` - Search indexed content.
 - `/sequence` - Enter collection mode to send files for sorting.
 - `/replace` - Start the bulk text/link replacement workflow.
 - `/replace_domain` - Perform domain-wide replacement (Owner only).
-- `/cancel_replace` - Cancel an active domain replacement task.
-- `/font <channel_id>` - Apply a Unicode font style to existing messages.
+- `/font <message_link>` - Apply a Unicode font style to a range of messages.
 - `/fontchannel <channel_id>` - Set a default Unicode font for a channel.
 
 ### Admin Commands
 - `/setchannel <id>` - Set the source channel for indexing.
 - `/setbot <username>` - Set the batch bot username for search links.
 - `/reindex` - Scan or rescan the source channel for content.
+- `/verify` - Verify bot access and permissions in configured channels.
 
 ## Environment Variables
 
@@ -35,7 +36,6 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
 - `MONGO_URI`: Your MongoDB Connection String.
-- `STRING_SESSION`: Pyrogram String Session for the Userbot.
 - `OWNER_ID`: Your Telegram User ID.
 - `ADMINS`: Comma-separated list of authorized Admin IDs.
 - `LOG_CHANNEL`: ID of the channel for logs.
@@ -46,12 +46,9 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 
 1. **Fork** this repository.
 2. Create a **MongoDB** database.
-3. Get a **String Session** for your user account.
-4. Create a new **Web Service** on Render.
-5. Connect your repository and configure the environment variables.
-6. The bot will automatically start the health check server on the assigned port.
+3. Create a new **Web Service** on Render.
+4. Connect your repository and configure the environment variables.
+5. The bot will automatically start the health check server on the assigned port.
 
-## Sorting & Search Logic
-
-The bot extracts metadata (Season, Episode, Quality) using optimized regex and groups search results by quality with priority: `480p > 720p > 1080p > 2160p`.
-The `/replace` command uses the Userbot client to allow edits in restricted channels or where the bot itself lacks permissions.
+## Note on Permissions
+Since this bot does not use a Userbot, it **MUST** be an administrator in any channel it needs to index, edit, or stylize. It needs "Edit Messages" and "Post Messages" permissions.
