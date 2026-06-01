@@ -15,6 +15,30 @@ logger = logging.getLogger(__name__)
 async def health_check(request):
     return web.Response(text="Bot is running!")
 
+async def redirect_handler(request):
+    url = request.query.get('url')
+    if not url:
+        return web.Response(text="Missing URL parameter", status=400)
+
+    # HTML with JavaScript and Meta Refresh redirect
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="0;url={url}">
+        <title>Redirecting...</title>
+        <script type="text/javascript">
+            window.location.href = "{url}";
+        </script>
+    </head>
+    <body>
+        <p>If you are not redirected, <a href="{url}">click here</a>.</p>
+    </body>
+    </html>
+    """
+    return web.Response(text=html_content, content_type='text/html')
+
 class Bot(Client):
     def __init__(self):
         super().__init__(
@@ -33,9 +57,10 @@ class Bot(Client):
         # Peer caching logic
         await self.cache_peers()
 
-        # Start Health Check Server
+        # Start Health Check & Redirect Server
         app = web.Application()
         app.router.add_get("/", health_check)
+        app.router.add_get("/go", redirect_handler)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", Config.PORT)

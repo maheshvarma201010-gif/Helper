@@ -11,6 +11,7 @@ class Config:
     OWNER_ID = int(os.getenv("OWNER_ID", 0))
     LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", 0))
     PORT = int(os.getenv("PORT", 8080))
+    BASE_URL = os.getenv("BASE_URL", os.getenv("RENDER_EXTERNAL_URL", f"http://localhost:{PORT}"))
 
     # Admins list
     raw_admins = os.getenv("ADMINS", "")

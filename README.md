@@ -23,6 +23,7 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 - `/replace_domain` - Perform domain-wide replacement (Owner only).
 - `/font <message_link>` - Apply a Unicode font style to a range of messages.
 - `/fontchannel <channel_id>` - Set a default Unicode font for a channel.
+- `/redirect <url>` - Generate a redirect link through the bot's web server.
 
 ### Admin Commands
 - `/setchannel <id>` - Set the source channel for indexing.
