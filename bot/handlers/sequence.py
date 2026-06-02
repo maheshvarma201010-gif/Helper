@@ -14,13 +14,17 @@ async def sequence_command(client, message):
     user_id = message.from_user.id
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, "collecting_files")
-    await message.reply_text(
+
+    # Store message_id for progress updates
+    status = await message.reply_text(
         "📥 **File Collection Started**\n\n"
         "Please send all videos/files you want to sequence.\n"
         "I will sort them by Season, Quality, and Episode.\n\n"
-        "When finished, send /done\n"
-        "To abort, send /cancel"
+        "**Progress:** 0 files collected\n\n"
+        "When finished, send /done"
     )
+    # Save the status message ID in sequence job to update it later
+    await db.update_replace_data(user_id, {"status_msg_id": status.id})
 
 @Client.on_message(filters.private & ~filters.command(["done", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect"]))
 async def collect_files(client, message: Message):
@@ -35,8 +39,8 @@ async def collect_files(client, message: Message):
         filename = getattr(file_obj, "file_name", "Unknown")
         caption = message.caption or ""
 
-        # Metadata extraction with strict priority
-        season, episode, quality = get_metadata(caption, filename)
+        # Metadata extraction
+        season, episode, quality, title = get_metadata(caption, filename)
 
         file_data = {
             "message_id": message.id,
@@ -49,6 +53,24 @@ async def collect_files(client, message: Message):
             "timestamp": time.time()
         }
         await db.add_sequence_file(user_id, file_data)
+
+        # Get count and update progress every 10 files
+        files = await db.get_sequence_files(user_id)
+        count = len(files)
+
+        if count % 10 == 0:
+            data = await db.get_replace_data(user_id)
+            if data and "status_msg_id" in data:
+                try:
+                    await client.edit_message_text(
+                        chat_id=user_id,
+                        message_id=data["status_msg_id"],
+                        text=f"📥 **File Collection In Progress**\n\n"
+                             f"**Progress:** {count} files collected\n\n"
+                             f"Send more files or /done to finish."
+                    )
+                except Exception:
+                    pass
     else:
         await message.reply_text("Please send a valid video or document file.")
 
@@ -72,7 +94,7 @@ async def done_command(client, message):
     try:
         sorted_list = sort_files(files)
     except Exception as e:
-        logger.error(f"Sorting error for user {user_id}: {e}")
+        logger.error(f"Sorting error: {e}")
         return await status_msg.edit_text(f"❌ Sorting failed: {e}")
 
     count = 0
@@ -87,8 +109,8 @@ async def done_command(client, message):
             await asyncio.sleep(0.5)
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)
-        except Exception as e:
-            logger.error(f"Error copying message {file_info['message_id']}: {e}")
+        except Exception:
+            pass
 
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
