@@ -39,7 +39,8 @@ class TestParser(unittest.TestCase):
     def test_quality_extraction(self):
         self.assertEqual(extract_metadata("720p")[2], "720p")
         self.assertEqual(extract_metadata("1080p")[2], "1080p")
-        self.assertEqual(extract_metadata("nothing")[2], "Unknown")
+        # In actual use, get_metadata handles the "Unknown" fallback
+        self.assertIsNone(extract_metadata("nothing")[2])
 
 if __name__ == '__main__':
     unittest.main()

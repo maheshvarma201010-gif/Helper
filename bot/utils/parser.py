@@ -2,38 +2,55 @@ import re
 
 def extract_metadata(text):
     if not text:
-        return 1, 0, "Unknown", ""
+        return None, None, None, ""
 
-    # Quality extraction - Expanded list
-    qualities = ["2160p", "1440p", "1080p", "900p", "720p", "576p", "540p", "480p", "360p", "240p", "BluRay", "WEB-DL"]
-    quality = "Unknown"
+    # Quality extraction
+    qualities = ["2160p", "1440p", "1080p", "900p", "720p", "576p", "540p", "480p", "360p", "240p"]
+    quality = None
     for q in qualities:
-        if q.lower() in text.lower():
-            # Standardize quality string
-            quality = q if "p" in q else quality
-            if quality == "Unknown" and ("BluRay" in q or "WEB-DL" in q):
-                 # Try to find a 'p' quality near these tags if not found yet
-                 pass
+        if q in text:
+            quality = q
+            break
+    if not quality:
+        for q in qualities:
+            if q.lower() in text.lower():
+                quality = q
+                break
 
-    # Season extraction - Support more patterns like 'S22', 'Season 22', '22x01'
-    season_match = re.search(r'(?:Season|S)\s*(\d+)', text, re.IGNORECASE)
-    if not season_match:
-        season_match = re.search(r'(\d+)x\d+', text, re.IGNORECASE)
-    season = int(season_match.group(1)) if season_match else 1
+    # Season extraction
+    season_patterns = [
+        r'Season\s*(\d+)',
+        r'S(\d+)',
+        r'(\d+)x\d+'
+    ]
+    season = None
+    for pattern in season_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            season = int(match.group(1))
+            break
 
-    # Episode extraction - Support 'E1135', 'EP1135', '1135', 'S22E1135'
-    episode_match = re.search(r'(?:Episode|EP|E|S\d+E)\s*(\d+)', text, re.IGNORECASE)
-    if not episode_match:
-        episode_match = re.search(r'\d+x(\d+)', text, re.IGNORECASE)
-    if not episode_match:
-        # Match standalone numbers that look like episodes (3-4 digits usually for long series)
-        episode_match = re.search(r'(?:\s|-|\[)(\d{1,4})(?:\s|\]|\.|$)', text)
+    # Episode extraction
+    episode_patterns = [
+        r'Episode\s*(\d+)',
+        r'EP(\d+)',
+        r'E(\d+)',
+        r'S\d+E(\d+)',
+        r'\d+x(\d+)',
+        r'(?:\s|\[|-)(\d{1,4})(?:\s|\]|\.|$)'
+    ]
+    episode = None
+    for pattern in episode_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            # Avoid matching year like 2024 as episode
+            val = int(match.group(1))
+            if val < 2000:
+                episode = val
+                break
 
-    episode = int(episode_match.group(1)) if episode_match else 0
-
-    # Title extraction - Aggressive cleaning
+    # Title extraction
     clean_text = text
-    # Remove metadata patterns
     patterns_to_remove = [
         r'\.(?:mkv|mp4|avi|mp3|zip|rar)$',
         r'\[.*?\]',
@@ -43,28 +60,32 @@ def extract_metadata(text):
         r'\d+x\d+',
         r'(?:2160p|1440p|1080p|900p|720p|576p|540p|480p|360p|240p)',
         r'(?:x264|x265|10bit|WEB-DL|BluRay|Multi Audio|ESub|Dual|DUB|Multi|Hin|Tam|Tel|Jap|English)',
-        r'(?:💾 Size :.*?|🌍 Languages :.*?|📺 Quality :.*?)'
     ]
     for pattern in patterns_to_remove:
-        clean_text = re.sub(pattern, ' ', clean_text, flags=re.IGNORECASE | re.DOTALL)
+        clean_text = re.sub(pattern, ' ', clean_text, flags=re.IGNORECASE)
 
     clean_text = clean_text.replace('-', ' ').replace('_', ' ').replace('.', ' ').replace(':', ' ')
     title = ' '.join(clean_text.split()).strip()
 
-    # Fallback title if everything was stripped
-    if not title or len(title) < 2:
-        title = text.split('.')[0][:50].strip()
-
     return season, episode, quality, title
 
 def get_metadata(caption, filename):
-    s_c, e_c, q_c, t_c = extract_metadata(caption)
+    # Priority 1: Caption
+    s, e, q, t = extract_metadata(caption)
+
+    # Priority 2: Filename (if metadata missing from caption)
     s_f, e_f, q_f, t_f = extract_metadata(filename)
 
-    # Selection logic: prioritize the most complete info
-    s = s_c if s_c != 1 else s_f
-    e = e_c if e_c != 0 else s_f if e_c == 0 and s_f > 100 else e_f # Handle cases where ep is misidentified as season
-    q = q_c if q_c != "Unknown" else q_f
-    t = t_f if len(t_f) > len(t_c) else t_c
+    # Strict Priority Logic
+    final_s = s if s is not None else s_f
+    final_e = e if e is not None else e_f
+    final_q = q if q is not None else q_f
 
-    return s, e, q, t
+    # Priority 3: Fallback
+    if final_s is None: final_s = 1
+    if final_e is None: final_e = 0
+    if final_q is None: final_q = "Unknown"
+
+    final_title = t if len(t) > 2 else t_f
+
+    return final_s, final_e, final_q, final_title

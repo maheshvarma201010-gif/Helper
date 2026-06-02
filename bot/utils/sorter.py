@@ -15,14 +15,18 @@ QUALITY_ORDER = {
 def sort_files(files):
     """
     Sorts files based on Season -> Quality -> Episode.
-    Each file in the list should be a dictionary containing:
-    'season', 'episode', 'quality'
     """
+    # Defensive programming: ensure all keys exist
+    for f in files:
+        if 'season' not in f: f['season'] = 1
+        if 'episode' not in f: f['episode'] = 0
+        if 'quality' not in f: f['quality'] = "Unknown"
+
     return sorted(
         files,
         key=lambda x: (
-            x.get('season', 1),
-            QUALITY_ORDER.get(x.get('quality', 'Unknown'), 11),
-            x.get('episode', 0)
+            int(x['season']),
+            QUALITY_ORDER.get(x['quality'], 11),
+            int(x['episode'])
         )
     )

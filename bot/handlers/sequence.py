@@ -22,19 +22,7 @@ async def sequence_command(client, message):
         "To abort, send /cancel"
     )
 
-@Client.on_message(filters.command("cancel") & filters.private)
-async def cancel_command(client, message):
-    user_id = message.from_user.id
-    state = await db.get_user_state(user_id)
-    if state:
-        await db.update_user_state(user_id, None)
-        await db.clear_sequence_files(user_id)
-        await db.clear_replace_data(user_id)
-        await message.reply_text("❌ Operation cancelled and temporary data cleared.")
-    else:
-        await message.reply_text("No active operation to cancel.")
-
-@Client.on_message(filters.private & ~filters.command(["done", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify"]))
+@Client.on_message(filters.private & ~filters.command(["done", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect"]))
 async def collect_files(client, message: Message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -47,8 +35,8 @@ async def collect_files(client, message: Message):
         filename = getattr(file_obj, "file_name", "Unknown")
         caption = message.caption or ""
 
-        # Enhanced metadata extraction
-        season, episode, quality, title = get_metadata(caption, filename)
+        # Metadata extraction with strict priority
+        season, episode, quality = get_metadata(caption, filename)
 
         file_data = {
             "message_id": message.id,
@@ -58,12 +46,9 @@ async def collect_files(client, message: Message):
             "season": season,
             "episode": episode,
             "quality": quality,
-            "type": message.media.value,
             "timestamp": time.time()
         }
         await db.add_sequence_file(user_id, file_data)
-        # We don't send a message for every file to avoid flood,
-        # but we could add a reaction if supported by the bot API version
     else:
         await message.reply_text("Please send a valid video or document file.")
 
@@ -83,30 +68,28 @@ async def done_command(client, message):
 
     status_msg = await message.reply_text(f"📊 Collected {len(files)} files. Sorting and sending back...")
 
-    # Sort files using the strict priority: Season -> Quality -> Episode
-    sorted_list = sort_files(files)
+    # Sort files: Season -> Quality -> Episode
+    try:
+        sorted_list = sort_files(files)
+    except Exception as e:
+        logger.error(f"Sorting error for user {user_id}: {e}")
+        return await status_msg.edit_text(f"❌ Sorting failed: {e}")
 
     count = 0
     for file_info in sorted_list:
-        # Retry logic for sending
-        for attempt in range(3):
-            try:
-                # Use copy_message to preserve File ID, Caption, and Filename exactly
-                await client.copy_message(
-                    chat_id=message.chat.id,
-                    from_chat_id=message.chat.id,
-                    message_id=file_info["message_id"]
-                )
-                count += 1
-                await asyncio.sleep(0.5) # Anti-flood delay
-                break
-            except errors.FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-            except Exception as e:
-                logger.error(f"Error sending file {file_info['message_id']} on attempt {attempt+1}: {e}")
-                await asyncio.sleep(2)
+        try:
+            await client.copy_message(
+                chat_id=message.chat.id,
+                from_chat_id=message.chat.id,
+                message_id=file_info["message_id"]
+            )
+            count += 1
+            await asyncio.sleep(0.5)
+        except errors.FloodWait as e:
+            await asyncio.sleep(e.value + 1)
+        except Exception as e:
+            logger.error(f"Error copying message {file_info['message_id']}: {e}")
 
-    # Cleanup
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
     await status_msg.edit_text(f"✅ **Sequencing Complete!**\nSent {count} files in sorted order.")
