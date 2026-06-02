@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 import aiohttp_jinja2
 import jinja2
 from pyrogram import Client, errors
@@ -99,18 +100,24 @@ class Bot(Client):
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
 
+        # Ensure directories exist
+        static_path = "bot/web/static"
+        template_path = "bot/web/templates"
+        os.makedirs(static_path, exist_ok=True)
+        os.makedirs(template_path, exist_ok=True)
+
         # Peer caching logic
         await self.cache_peers()
 
         # Start Health Check & Redirect Server
         app = web.Application()
-        aiohttp_jinja2.setup(app, loader=jinja2.FileSystemLoader("bot/web/templates"))
+        aiohttp_jinja2.setup(app, loader=jinja2.FileSystemLoader(template_path))
 
         app.router.add_get("/", home_handler)
         app.router.add_get("/web-search", web_search_handler)
         app.router.add_get("/health", health_check)
         app.router.add_get("/go", redirect_handler)
-        app.router.add_static("/static", "bot/web/static")
+        app.router.add_static("/static", static_path)
 
         runner = web.AppRunner(app)
         await runner.setup()
