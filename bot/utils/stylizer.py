@@ -107,8 +107,8 @@ def stylize_text(text, style):
                 result.append("".join(get_char(c, style) for c in part))
             else:
                 # Outside a link, look for naked URLs and Usernames to stylize and wrap
-                # Pattern for URLs and Usernames
-                combined_pattern = r'(https?://[^\s<>"]+|@[\w\d_]+)'
+                # Pattern for URLs and Usernames (usernames must be 5-32 chars, letters, numbers, underscores)
+                combined_pattern = r'(https?://[^\s<>"]+|(?:\s|^)@[a-zA-Z0-9_]{5,32})'
                 sub_parts = re.split(combined_pattern, part)
                 for sp in sub_parts:
                     if not sp: continue
@@ -116,11 +116,14 @@ def stylize_text(text, style):
                         # Stylize URL characters and wrap in <a> tag
                         stylized_url = "".join(get_char(c, style) for c in sp)
                         result.append(f'<a href="{sp}">{stylized_url}</a>')
-                    elif sp.startswith('@'):
+                    elif '@' in sp and sp.strip().startswith('@'):
                         # Stylize Username characters and wrap in <a> tag
-                        username = sp[1:]
+                        # sp might contain a leading space
+                        at_index = sp.find('@')
+                        prefix = sp[:at_index]
+                        username = sp[at_index+1:]
                         stylized_username = "@" + "".join(get_char(c, style) for c in username)
-                        result.append(f'<a href="https://t.me/{username}">{stylized_username}</a>')
+                        result.append(f'{prefix}<a href="https://t.me/{username}">{stylized_username}</a>')
                     else:
                         # Standard text, just stylize
                         result.append("".join(get_char(c, style) for c in sp))

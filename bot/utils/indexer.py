@@ -22,9 +22,11 @@ async def index_channel(client, chat_id, progress_msg=None):
                 # Enhanced metadata extraction
                 season, episode, quality, title = get_metadata(caption, filename)
 
+                import datetime
                 index_data = {
                     "chat_id": chat_id,
                     "message_id": message.id,
+                    "timestamp": datetime.datetime.now(datetime.UTC),
                     "title": title,
                     "season": season,
                     "episode": episode,

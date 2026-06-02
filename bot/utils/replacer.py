@@ -96,6 +96,9 @@ def render_message_to_html(text, entities):
             elif entity.type == enums.MessageEntityType.PRE: result += "<pre>"
             elif entity.type == enums.MessageEntityType.TEXT_LINK: result += f'<a href="{entity.url}">'
             elif entity.type == enums.MessageEntityType.URL: result += f'<a href="{html.escape(text[entity.offset:entity.offset+entity.length])}">'
+            elif entity.type == enums.MessageEntityType.MENTION: result += f'<a href="https://t.me/{text[entity.offset+1:entity.offset+entity.length]}">'
+            elif entity.type == enums.MessageEntityType.HASHTAG: result += f'<a href="https://t.me/share/url?url={html.escape(text[entity.offset:entity.offset+entity.length])}">'
+            elif entity.type == enums.MessageEntityType.CASHTAG: result += f'<a href="https://t.me/share/url?url={html.escape(text[entity.offset:entity.offset+entity.length])}">'
         else:
             if entity.type == enums.MessageEntityType.BOLD: result += "</b>"
             elif entity.type == enums.MessageEntityType.ITALIC: result += "</i>"
@@ -103,7 +106,7 @@ def render_message_to_html(text, entities):
             elif entity.type == enums.MessageEntityType.STRIKETHROUGH: result += "</s>"
             elif entity.type == enums.MessageEntityType.CODE: result += "</code>"
             elif entity.type == enums.MessageEntityType.PRE: result += "</pre>"
-            elif entity.type in [enums.MessageEntityType.TEXT_LINK, enums.MessageEntityType.URL]: result += "</a>"
+            elif entity.type in [enums.MessageEntityType.TEXT_LINK, enums.MessageEntityType.URL, enums.MessageEntityType.MENTION, enums.MessageEntityType.HASHTAG, enums.MessageEntityType.CASHTAG]: result += "</a>"
         last_offset = offset
     result += html.escape(text[last_offset:])
     return result

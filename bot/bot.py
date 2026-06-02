@@ -1,5 +1,7 @@
 import logging
 import asyncio
+import aiohttp_jinja2
+import jinja2
 from pyrogram import Client, errors
 from aiohttp import web
 from bot.config import Config
@@ -14,6 +16,49 @@ logger = logging.getLogger(__name__)
 
 async def health_check(request):
     return web.Response(text="Bot is running!")
+
+async def home_handler(request):
+    page = int(request.query.get('page', 1))
+    limit = 20
+    skip = (page - 1) * limit
+
+    items = await db.get_all_indexed(limit=limit, skip=skip)
+    recent = await db.get_recent_posts(hours=24)
+
+    # Simple total count for pagination
+    total_count = await db.indexes.count_documents({})
+    total_pages = (total_count + limit - 1) // limit
+
+    context = {
+        "items": items,
+        "recent_posts": recent,
+        "current_page": page,
+        "total_pages": total_pages
+    }
+    return aiohttp_jinja2.render_template("index.html", request, context)
+
+async def web_search_handler(request):
+    query = request.query.get('q', '')
+    if not query:
+        return web.HTTPFound('/')
+
+    # Reuse search logic from search_engine but simplified for web
+    query_filter = {"$or": [
+        {"title": {"$regex": query, "$options": "i"}},
+        {"caption": {"$regex": query, "$options": "i"}},
+        {"filename": {"$regex": query, "$options": "i"}}
+    ]}
+    items = await db.indexes.find(query_filter).sort("message_id", -1).to_list(length=100)
+    recent = await db.get_recent_posts(hours=24)
+
+    context = {
+        "items": items,
+        "recent_posts": recent,
+        "query": query,
+        "current_page": 1,
+        "total_pages": 1
+    }
+    return aiohttp_jinja2.render_template("index.html", request, context)
 
 async def redirect_handler(request):
     url = request.query.get('url')
@@ -59,8 +104,14 @@ class Bot(Client):
 
         # Start Health Check & Redirect Server
         app = web.Application()
-        app.router.add_get("/", health_check)
+        aiohttp_jinja2.setup(app, loader=jinja2.FileSystemLoader("bot/web/templates"))
+
+        app.router.add_get("/", home_handler)
+        app.router.add_get("/web-search", web_search_handler)
+        app.router.add_get("/health", health_check)
         app.router.add_get("/go", redirect_handler)
+        app.router.add_static("/static", "bot/web/static")
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", Config.PORT)

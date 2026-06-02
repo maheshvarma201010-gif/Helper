@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-5">
+    <div class="col-md-8 mx-auto text-center">
+        <h2 class="display-5 mb-4">Explore the <span class="neon-text">Digital Archive</span> 📂</h2>
+        <form action="/web-search" method="get" class="d-flex">
+            <input type="text" name="q" class="form-control form-control-cyber" placeholder="Search for anime, episodes, quality..." required>
+            <button type="submit" class="btn btn-cyber"><i class="fas fa-search"></i></button>
+        </form>
+    </div>
+</div>
+
+<div class="section-title mb-4">
+    <h3 class="border-start border-4 border-info ps-3">🎥 Recently Indexed</h3>
+</div>
+
+<div class="row g-4">
+    {% for item in items %}
+    <div class="col-xl-3 col-lg-4 col-md-6">
+        <div class="anime-card card">
+            <span class="badge-quality">{{ item.quality }}</span>
+            <div class="poster-container">
+                {% if item.poster_url %}
+                <img src="{{ item.poster_url }}" class="poster-img" alt="{{ item.title }}">
+                {% else %}
+                <img src="https://via.placeholder.com/1600x900/111/00f2ff?text={{ item.title|urlencode }}" class="poster-img" alt="{{ item.title }}">
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <h5 class="card-title text-truncate" title="{{ item.title }}">{{ item.title }}</h5>
+                <p class="card-text small text-secondary">
+                    Season {{ item.season }} • Episode {{ item.episode }}
+                </p>
+                <div class="d-grid mt-3">
+                    <a href="https://t.me/c/{{ item.chat_id|replace('-100', '') }}/{{ item.message_id }}" target="_blank" class="btn btn-outline-info btn-sm">
+                        <i class="fab fa-telegram-plane me-1"></i> View on Telegram
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12 text-center py-5">
+        <p class="lead">Archive is empty. Start indexing a channel!</p>
+    </div>
+    {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<nav class="mt-5">
+    <ul class="pagination justify-content-center">
+        {% for p in range(1, total_pages + 1) %}
+        <li class="page-item {% if p == current_page %}active{% endif %}">
+            <a class="page-link bg-dark border-secondary text-info" href="?page={{ p }}">{{ p }}</a>
+        </li>
+        {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}

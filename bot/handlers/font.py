@@ -70,12 +70,18 @@ async def font_callback(client: Client, callback: CallbackQuery):
     await callback.answer() # Stop loading spinner
     data = callback.data.split(":")
 
+    def parse_id(val):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return val
+
     # Check for apply with range: font:apply:first:last:font_style:channel_id
     if data[1] == "apply" and len(data) >= 6:
         first_id = int(data[2])
         last_id = int(data[3])
         font = data[4]
-        channel_id = int(data[5])
+        channel_id = parse_id(data[5])
         await callback.edit_message_text(f"🚀 Starting font conversion to `{font}` for {channel_id} (Range: {first_id}-{last_id})...")
         asyncio.create_task(apply_font_task(client, callback.message, channel_id, font, first_id, last_id))
         return
@@ -83,7 +89,7 @@ async def font_callback(client: Client, callback: CallbackQuery):
     # Standard set or apply: font:action:font_style:channel_id
     action = data[1]
     font = data[2]
-    channel_id = int(data[3]) if len(data) > 3 else None
+    channel_id = parse_id(data[3]) if len(data) > 3 else None
 
     if action == "set":
         if font == "normal":
@@ -100,29 +106,48 @@ async def font_callback(client: Client, callback: CallbackQuery):
 async def apply_font_task(client, status_msg, chat_id, font, first_id=0, last_id=0):
     worker = client
     count = 0
+    processed = 0
+    total = (last_id - first_id + 1) if (first_id > 0 and last_id > 0) else 200
 
     try:
         if first_id > 0 and last_id > 0:
             # Iterate through range
             for i in range(first_id, last_id + 1, 100):
                 batch_ids = list(range(i, min(i + 100, last_id + 1)))
-                messages = await worker.get_messages(chat_id, batch_ids)
+                try:
+                    messages = await worker.get_messages(chat_id, batch_ids)
+                except Exception as e:
+                    logger.error(f"Error fetching batch {i}-{i+100}: {e}")
+                    continue
+
                 if not isinstance(messages, list): messages = [messages]
 
                 for msg in messages:
+                    processed += 1
                     if not msg or msg.empty: continue
                     if await process_msg_font(worker, chat_id, msg, font):
                         count += 1
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.1) # Reduced sleep for performance
+
+                    if processed % 50 == 0:
+                        try:
+                            await status_msg.edit_text(f"⏳ Font conversion in progress...\n\nProcessed: `{processed}/{total}`\nModified: `{count}`")
+                        except: pass
         else:
             # Last 200 messages
             async for msg in worker.get_chat_history(chat_id, limit=200):
+                processed += 1
                 if not msg or msg.empty: continue
                 if await process_msg_font(worker, chat_id, msg, font):
                     count += 1
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)
 
-        await status_msg.edit_text(f"✅ Font conversion complete! Modified {count} messages.")
+                if processed % 50 == 0:
+                    try:
+                        await status_msg.edit_text(f"⏳ Font conversion in progress...\n\nProcessed: `{processed}/{total}`\nModified: `{count}`")
+                    except: pass
+
+        await status_msg.edit_text(f"✅ Font conversion complete!\n\nTotal Processed: `{processed}`\nModified: `{count}`")
     except Exception as e:
         logger.error(f"Font task failed: {e}")
         await status_msg.edit_text(f"❌ Font task failed: {e}")

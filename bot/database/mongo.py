@@ -79,6 +79,14 @@ class Database:
         latest = await self.indexes.find_one({"chat_id": chat_id}, sort=[("message_id", -1)])
         return latest["message_id"] if latest else 0
 
+    async def get_recent_posts(self, hours=24):
+        import datetime
+        since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=hours)
+        return await self.indexes.find({"timestamp": {"$gte": since}}).sort("timestamp", -1).to_list(length=100)
+
+    async def get_all_indexed(self, limit=100, skip=0):
+        return await self.indexes.find().sort("message_id", -1).skip(skip).to_list(length=limit)
+
     async def search_index(self, query_filter):
         return await self.indexes.find(query_filter).to_list(length=1000)
 
