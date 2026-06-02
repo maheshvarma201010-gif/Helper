@@ -80,7 +80,7 @@ async def done_command(client, message):
     state = await db.get_user_state(user_id)
 
     if state != "collecting_files":
-        return
+        return await message.reply_text("⚠️ You are not in collection mode. Start with /sequence first.")
 
     files = await db.get_sequence_files(user_id)
     if not files:

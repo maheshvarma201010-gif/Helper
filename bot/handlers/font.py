@@ -67,9 +67,10 @@ async def font_cmd(client, message: Message):
 
 @Client.on_callback_query(filters.regex(r"^font:"))
 async def font_callback(client: Client, callback: CallbackQuery):
+    await callback.answer() # Stop loading spinner
     data = callback.data.split(":")
-    # font:action:font:channel_id or font:apply:first:last:font:channel_id
 
+    # Check for apply with range: font:apply:first:last:font_style:channel_id
     if data[1] == "apply" and len(data) >= 6:
         first_id = int(data[2])
         last_id = int(data[3])
@@ -79,6 +80,7 @@ async def font_callback(client: Client, callback: CallbackQuery):
         asyncio.create_task(apply_font_task(client, callback.message, channel_id, font, first_id, last_id))
         return
 
+    # Standard set or apply: font:action:font_style:channel_id
     action = data[1]
     font = data[2]
     channel_id = int(data[3]) if len(data) > 3 else None
@@ -92,7 +94,7 @@ async def font_callback(client: Client, callback: CallbackQuery):
             await callback.edit_message_text(f"✅ Default font set to `{font}` for channel `{channel_id}`.")
 
     elif action == "apply":
-        await callback.edit_message_text(f"🚀 Starting font conversion to `{font}`. This may take a while...")
+        await callback.edit_message_text(f"🚀 Starting font conversion to `{font}` for {channel_id}. This may take a while...")
         asyncio.create_task(apply_font_task(client, callback.message, channel_id, font))
 
 async def apply_font_task(client, status_msg, chat_id, font, first_id=0, last_id=0):

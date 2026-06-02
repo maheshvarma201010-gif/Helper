@@ -106,17 +106,24 @@ def stylize_text(text, style):
                 # Already inside a link, just stylize characters
                 result.append("".join(get_char(c, style) for c in part))
             else:
-                # Outside a link, look for naked URLs to stylize and wrap
-                url_pattern = r'(https?://[^\s<>"]+)'
-                url_parts = re.split(url_pattern, part)
-                for u_part in url_parts:
-                    if re.match(url_pattern, u_part):
-                        # Stylize URL characters and wrap in <a> tag to keep it clickable
-                        stylized_url = "".join(get_char(c, style) for c in u_part)
-                        result.append(f'<a href="{u_part}">{stylized_url}</a>')
+                # Outside a link, look for naked URLs and Usernames to stylize and wrap
+                # Pattern for URLs and Usernames
+                combined_pattern = r'(https?://[^\s<>"]+|@[\w\d_]+)'
+                sub_parts = re.split(combined_pattern, part)
+                for sp in sub_parts:
+                    if not sp: continue
+                    if sp.startswith(('http://', 'https://')):
+                        # Stylize URL characters and wrap in <a> tag
+                        stylized_url = "".join(get_char(c, style) for c in sp)
+                        result.append(f'<a href="{sp}">{stylized_url}</a>')
+                    elif sp.startswith('@'):
+                        # Stylize Username characters and wrap in <a> tag
+                        username = sp[1:]
+                        stylized_username = "@" + "".join(get_char(c, style) for c in username)
+                        result.append(f'<a href="https://t.me/{username}">{stylized_username}</a>')
                     else:
                         # Standard text, just stylize
-                        result.append("".join(get_char(c, style) for c in u_part))
+                        result.append("".join(get_char(c, style) for c in sp))
 
     return "".join(result)
 

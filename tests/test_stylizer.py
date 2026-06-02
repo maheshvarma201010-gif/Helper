@@ -62,3 +62,10 @@ def test_stylize_nested_links():
     assert '<a href="https://google.com">' in result
     assert "𝐆𝐨𝐨𝐠𝐥𝐞" in result
     assert "𝐧𝐨𝐰" in result
+
+def test_stylize_usernames():
+    text = "Follow @John_Doe for more"
+    result = stylize_text(text, "bold")
+    assert "𝐅𝐨𝐥𝐥𝐨𝐰" in result
+    assert '<a href="https://t.me/John_Doe">@𝐉𝐨𝐡𝐧_𝐃𝐨𝐞</a>' in result
+    assert "𝐟𝐨𝐫" in result
