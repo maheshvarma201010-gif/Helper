@@ -4,7 +4,7 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 
 ## Features
 
-- **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode.
+- **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode using `/sequence` and `/sort`.
 - **Bulk Replacement**: Replace text, links, and usernames across channels.
 - **Font Styling**:
     - `/font <link>`: Apply Unicode font styles to a range of messages (e.g., `https://t.me/c/123/10-20`).

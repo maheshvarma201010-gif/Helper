@@ -12,6 +12,7 @@ async def start_command(client, message):
         "• /start - Show this welcome message\n"
         "• /search `<query>` - Search indexed channel content\n"
         "• /sequence - Start collecting files for automatic sorting\n"
+        "• /sort - Finish collection and sort files (Sequencer Mode)\n"
         "• /replace - Bulk replace text/links in channel messages\n"
         "• /replace_domain - Advanced domain replacement (Owner Only)\n"
         "• /cancel - Cancel collection/search operations\n"
@@ -19,7 +20,7 @@ async def start_command(client, message):
         "🛠 **How to Sequence:**\n"
         "1. Send /sequence\n"
         "2. Forward or upload all your files\n"
-        "3. Send /done when finished\n\n"
-        "Powered by Userbot indexing and MongoDB."
+        "3. Send /sort when finished\n\n"
+        "Powered by digital intelligence and MongoDB."
     )
     await message.reply_text(welcome_text)

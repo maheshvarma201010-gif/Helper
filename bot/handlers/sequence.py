@@ -17,16 +17,19 @@ async def sequence_command(client, message):
 
     # Store message_id for progress updates
     status = await message.reply_text(
-        "📥 **File Collection Started**\n\n"
-        "Please send all videos/files you want to sequence.\n"
-        "I will sort them by Season, Quality, and Episode.\n\n"
-        "**Progress:** 0 files collected\n\n"
-        "When finished, send /done"
+        "🚀 **Sequencer Mode Activated**\n\n"
+        "Please send/forward all videos or files you want to sort.\n"
+        "I will organize them by:\n"
+        "1️⃣ **Season**\n"
+        "2️⃣ **Quality** (480p, 720p, etc.)\n"
+        "3️⃣ **Episode**\n\n"
+        "✨ **Total Collected:** `0` files\n\n"
+        "➡️ Send /sort when you are ready to finish."
     )
     # Save the status message ID in sequence job to update it later
     await db.update_replace_data(user_id, {"status_msg_id": status.id})
 
-@Client.on_message(filters.private & ~filters.command(["done", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect"]))
+@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain"]))
 async def collect_files(client, message: Message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -65,17 +68,20 @@ async def collect_files(client, message: Message):
                     await client.edit_message_text(
                         chat_id=user_id,
                         message_id=data["status_msg_id"],
-                        text=f"📥 **File Collection In Progress**\n\n"
-                             f"**Progress:** {count} files collected\n\n"
-                             f"Send more files or /done to finish."
+                        text=f"🔄 **File Collection In Progress**\n\n"
+                             f"Organizing your media library...\n\n"
+                             f"✨ **Total Collected:** `{count}` files\n\n"
+                             f"➡️ Send more files or /sort to finalize the order."
                     )
                 except Exception:
                     pass
     else:
-        await message.reply_text("Please send a valid video or document file.")
+        # If user sends text that isn't a command, remind them
+        if message.text:
+            await message.reply_text("❌ Please send a valid **Video** or **Document** file, or use /sort to finish.")
 
-@Client.on_message(filters.command("done") & filters.private)
-async def done_command(client, message):
+@Client.on_message(filters.command("sort") & filters.private)
+async def sort_command(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
@@ -84,18 +90,20 @@ async def done_command(client, message):
 
     files = await db.get_sequence_files(user_id)
     if not files:
-        await message.reply_text("⚠️ No files collected. Aborting.")
+        await message.reply_text("⚠️ No files were collected. Aborting process.")
         await db.update_user_state(user_id, None)
         return
 
-    status_msg = await message.reply_text(f"📊 Collected {len(files)} files. Sorting and sending back...")
+    status_msg = await message.reply_text(f"⏳ **Processing {len(files)} files...**\nSorting by Season → Quality → Episode.")
 
     # Sort files: Season -> Quality -> Episode
     try:
         sorted_list = sort_files(files)
     except Exception as e:
         logger.error(f"Sorting error: {e}")
-        return await status_msg.edit_text(f"❌ Sorting failed: {e}")
+        return await status_msg.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
+
+    await status_msg.edit_text(f"✅ **Sorting Complete!**\nNow sending {len(sorted_list)} files back to you...")
 
     count = 0
     for file_info in sorted_list:
@@ -106,12 +114,21 @@ async def done_command(client, message):
                 message_id=file_info["message_id"]
             )
             count += 1
-            await asyncio.sleep(0.5)
+            # Exponential backoff or simple delay to avoid flood
+            await asyncio.sleep(0.3)
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)
-        except Exception:
-            pass
+            # Retry after flood
+            await client.copy_message(chat_id=message.chat.id, from_chat_id=message.chat.id, message_id=file_info["message_id"])
+            count += 1
+        except Exception as e:
+            logger.warning(f"Failed to send file {file_info.get('message_id')}: {e}")
 
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
-    await status_msg.edit_text(f"✅ **Sequencing Complete!**\nSent {count} files in sorted order.")
+
+    await message.reply_text(
+        f"🏁 **Sequencing Finished!**\n\n"
+        f"✅ Total files sent: `{count}`\n"
+        f"📁 All files have been organized perfectly."
+    )
