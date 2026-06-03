@@ -1,6 +1,7 @@
 import re
 import asyncio
 import cloudscraper
+import requests
 import logging
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters, enums
@@ -34,6 +35,20 @@ def get_multi_lang_links(target_url: str):
 
     try:
         response = my_scraper.get(target_url, headers=headers, timeout=20)
+
+        # Fallback logic for redirects if initial request fails (e.g., 403 on redirector)
+        if response.status_code != 200:
+            try:
+                fb_res = requests.get(target_url, headers=headers, allow_redirects=True, timeout=15)
+                if fb_res.status_code == 200:
+                    if str(fb_res.url) != target_url:
+                        target_url = str(fb_res.url)
+                        response = my_scraper.get(target_url, headers=headers, timeout=20)
+                    else:
+                        response = fb_res
+            except Exception as fe:
+                logger.error(f"Redirect fallback error: {fe}")
+
         if response.status_code != 200:
             return f"❌ Failed to connect to main page: Status {response.status_code}\nURL: `{target_url}`"
 
