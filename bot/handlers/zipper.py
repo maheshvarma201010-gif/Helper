@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 def get_multi_lang_links(target_url: str):
     """
-    Blocking scraper logic adapted from user script.
+    Robust scraper logic with redirect fallback and dynamic version extraction.
+    Designed to handle multi-level redirectors (RareAnimes, AnimeToonHindi, codedew).
     """
-    # Create a more robust scraper instance
-    my_scraper = cloudscraper.create_scraper(
+    scraper = cloudscraper.create_scraper(
         browser={
             'browser': 'chrome',
             'platform': 'android',
@@ -23,6 +23,7 @@ def get_multi_lang_links(target_url: str):
     )
 
     headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "max-age=0",
@@ -30,180 +31,185 @@ def get_multi_lang_links(target_url: str):
         "Upgrade-Insecure-Requests": "1"
     }
 
-    output = []
-    output.append(f"🔍 **Zipper Scan Results**\n`{target_url[:30]}...`\n")
+    def robust_get(url, referer=None):
+        if referer:
+            headers['Referer'] = referer
+        else:
+            headers.pop('Referer', None)
 
-    try:
-        response = my_scraper.get(target_url, headers=headers, timeout=20)
+        try:
+            resp = scraper.get(url, headers=headers, timeout=20)
+            if resp.status_code == 200:
+                return resp
 
-        # Fallback logic for redirects if initial request fails (e.g., 403 on redirector)
-        if response.status_code != 200:
+            logger.info(f"Scraper got {resp.status_code} for {url}. Trying requests fallback...")
+            fb_res = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
+
+            if fb_res.status_code == 200:
+                if str(fb_res.url) != url:
+                    logger.info(f"Redirected to {fb_res.url}. Retrying scraper on final URL...")
+                    return scraper.get(str(fb_res.url), headers=headers, timeout=20)
+                return fb_res
+            return resp
+        except Exception as e:
+            logger.error(f"Error fetching {url}: {e}")
             try:
-                fb_res = requests.get(target_url, headers=headers, allow_redirects=True, timeout=15)
-                if fb_res.status_code == 200:
-                    if str(fb_res.url) != target_url:
-                        target_url = str(fb_res.url)
-                        response = my_scraper.get(target_url, headers=headers, timeout=20)
-                    else:
-                        response = fb_res
-            except Exception as fe:
-                logger.error(f"Redirect fallback error: {fe}")
+                return requests.get(url, headers=headers, allow_redirects=True, timeout=15)
+            except:
+                return None
 
-        if response.status_code != 200:
-            return f"❌ Failed to connect to main page: Status {response.status_code}\nURL: `{target_url}`"
+    def extract_from_page(soup):
+        """Extracts all possible video links and versioned buttons from a page."""
+        results = {}
+        indicators = ['workers.dev', 'homelander', 'flashzipper', 'streamwish', 'filepress', 'gdflix', 'streamtape', 'pixeldra.in', 'filepress']
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        languages_found = {}
+        # 1. Elements (a, button)
+        for tag in soup.find_all(['a', 'button']):
+            txt = tag.text.strip().lower()
+            v_match = re.search(r'(?:v|version|player|server|stream|mirror)\s*[-_]?\s*(\d+)', txt)
+            v_key = f"v{v_match.group(1)}" if v_match else None
 
-        # Searching for language download links
-        for a_tag in soup.find_all('a', href=True):
-            link_text = a_tag.text.lower().strip()
-            link_href = a_tag['href']
+            is_video_btn = any(x in txt for x in ["streambeta", "watch", "download", "player", "mirror", "server", "v1", "v2"])
+            if not v_key and is_video_btn: v_key = "v1"
 
-            if "download" in link_text:
-                if "hindi" in link_text:
-                    languages_found["Hindi"] = link_href
-                elif "tamil" in link_text:
-                    languages_found["Tamil"] = link_href
-                elif "telugu" in link_text:
-                    languages_found["Telugu"] = link_href
+            if v_key:
+                sources = [tag.get('data-link'), tag.get('data-url'), tag.get('data-href'), tag.get('onclick'), tag.get('href')]
+                for src in sources:
+                    if src and isinstance(src, str) and "javascript" not in src.lower() and src != "#":
+                        u_match = re.search(r'(https?://[^\s"\']+)', src)
+                        if u_match:
+                            u = u_match.group(1)
+                            uvm = re.search(r'v(\d+)', u.lower())
+                            vk = f"v{uvm.group(1)}" if uvm else v_key
+                            if vk not in results:
+                                results[vk] = u
+                                break
 
-        if not languages_found:
-            # Fallback: Check if the current page is a direct language page
-            # Look for streambeta link in the current page
-            streambeta_url = None
-            for a_tag in soup.find_all(['a', 'button']):
-                tag_text = a_tag.text.lower().strip()
-                tag_href = a_tag.get('href', '').lower().strip()
-                tag_onclick = a_tag.get('onclick', '').lower().strip()
+        # 2. Scripts and Iframes
+        all_text = str(soup).replace('\\/', '/')
+        found_urls = re.findall(r'https?://[^\s\"\'\\]+', all_text)
+        for u in found_urls:
+            if any(ind in u.lower() for ind in indicators):
+                vm = re.search(r'v(\d+)', u.lower())
+                vk = f"v{vm.group(1)}" if vm else None
+                if vk:
+                    if vk not in results: results[vk] = u
+                else:
+                    for i in range(1, 21):
+                        slot = f"v{i}"
+                        if slot not in results:
+                            results[slot] = u
+                            break
+        return results
 
-                if any(x in tag_text or x in tag_href or x in tag_onclick for x in ["streambeta", "stream", "watch", "player"]):
-                    if "http" in tag_href:
-                        streambeta_url = a_tag['href']
-                    elif "http" in tag_onclick:
-                        match = re.search(r'(https?://[^\s"\']+)', tag_onclick)
-                        if match: streambeta_url = match.group(1)
-                    if streambeta_url: break
+    # --- MAIN FLOW ---
+    output = [f"🔍 **Zipper Scan Results**\n`{target_url[:30]}...`\n"]
 
-            if not streambeta_url:
-                iframe = soup.find('iframe', src=re.compile(r'streambeta|player|stream'))
-                if iframe: streambeta_url = iframe['src']
+    resp = robust_get(target_url)
+    if not resp or resp.status_code != 200:
+        return f"❌ Failed to connect: Status {getattr(resp, 'status_code', 'Error')}\nURL: `{target_url}`"
 
-            if streambeta_url:
-                # Infer language from URL or title
-                lang_name = "Detected"
-                if "/hindi/" in target_url.lower(): lang_name = "Hindi"
-                elif "/tamil/" in target_url.lower(): lang_name = "Tamil"
-                elif "/telugu/" in target_url.lower(): lang_name = "Telugu"
-                languages_found[lang_name] = target_url
-            else:
-                return "❌ No language download links or StreamBeta endpoints found on this page."
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    current_url = str(resp.url)
 
-        for lang_name, lang_url in languages_found.items():
-            output.append(f"🌐 **Language:** `{lang_name}`")
+    pathways = []
+    # RareAnimes Style (Language Links)
+    for a in soup.find_all('a', href=True):
+        txt = a.text.lower()
+        if "download" in txt:
+            if "hindi" in txt: pathways.append(("Hindi", a['href']))
+            elif "tamil" in txt: pathways.append(("Tamil", a['href']))
+            elif "telugu" in txt: pathways.append(("Telugu", a['href']))
 
-            headers['Referer'] = target_url
-            try:
-                lang_res = my_scraper.get(lang_url, headers=headers, timeout=20)
-                if lang_res.status_code != 200:
-                    output.append(f"   └ ❌ Failed to open language page (Status {lang_res.status_code}).\n")
-                    continue
-            except Exception as e:
-                output.append(f"   └ ❌ Error opening language page: `{str(e)[:50]}`\n")
-                continue
+    # Strategy 2: Direct links or redirectors
+    for tag in soup.find_all(['a', 'button']):
+        txt = tag.text.strip()
+        hr = tag.get('href', '')
+        oc = tag.get('onclick', '')
+        if any(x in txt.lower() or x in hr.lower() or x in oc.lower() for x in ["streambeta", "stream", "watch", "player", "zipper", "multiquality", "direct"]):
+            u = hr if (hr and hr.startswith("http")) else (re.search(r'(https?://[^\s"\']+)', oc).group(1) if "http" in oc else None)
+            if u: pathways.append((txt if (txt and len(txt) < 30) else "Watch", u))
 
-            lang_soup = BeautifulSoup(lang_res.text, 'html.parser')
-            streambeta_url = None
+    if not pathways:
+        pathways.append(("Detected", current_url))
 
-            for a_tag in lang_soup.find_all(['a', 'button'], href=True):
-                tag_text = a_tag.text.lower().strip()
-                tag_href = a_tag.get('href', '').lower().strip()
-                tag_onclick = a_tag.get('onclick', '').lower().strip()
+    processed_urls = set()
+    for label, p_url in pathways:
+        if p_url in processed_urls: continue
+        processed_urls.add(p_url)
 
-                if any(x in tag_text or x in tag_href or x in tag_onclick for x in ["streambeta", "stream", "watch", "player"]):
-                    if "http" in tag_href:
-                        streambeta_url = a_tag['href']
-                    elif "http" in tag_onclick:
-                        match = re.search(r'(https?://[^\s"\']+)', tag_onclick)
-                        if match: streambeta_url = match.group(1)
+        # Filter out social links
+        if any(x in p_url for x in ["facebook.com", "twitter.com", "instagram.com", "google.com", "youtube.com"]):
+             continue
 
-                    if streambeta_url: break
+        # Fetch pathway page
+        p_resp = robust_get(p_url, referer=current_url)
+        if not p_resp or p_resp.status_code != 200:
+            continue
 
-            if not streambeta_url:
-                # Last resort: look for iframes
-                iframe = lang_soup.find('iframe', src=re.compile(r'streambeta|player|stream'))
-                if iframe:
-                    streambeta_url = iframe['src']
+        p_soup = BeautifulSoup(p_resp.text, 'html.parser')
+        p_curr_url = str(p_resp.url)
 
-            if not streambeta_url:
-                output.append(f"   └ ❌ StreamBeta/Player link not found.\n")
-                continue
+        # Try extraction
+        v_links = extract_from_page(p_soup)
 
-            headers['Referer'] = lang_url
-            try:
-                beta_res = my_scraper.get(streambeta_url, headers=headers, timeout=20)
-            except Exception as e:
-                output.append(f"   └ ❌ Error opening StreamBeta page: `{str(e)[:50]}`\n")
-                continue
+        # Follow hops if no video links found yet
+        if not v_links:
+            potential_next = []
+            for a in p_soup.find_all(['a', 'button']):
+                txt_l = a.text.lower()
+                hr = a.get('href', '')
+                oc = a.get('onclick', '')
+                if any(x in txt_l or x in hr.lower() or x in oc.lower() for x in ["streambeta", "stream", "watch", "player", "zipper", "multiquality"]):
+                    u = hr if (hr and hr.startswith("http")) else (re.search(r'(https?://[^\s"\']+)', oc).group(1) if "http" in oc else None)
+                    if u and u not in processed_urls: potential_next.append(u)
 
-            v1_link = "Not Found"
-            v2_link = "Not Found"
+            for next_url in potential_next[:3]:
+                n_resp = robust_get(next_url, referer=p_curr_url)
+                if n_resp and n_resp.status_code == 200:
+                    n_soup = BeautifulSoup(n_resp.text, 'html.parser')
+                    v_links.update(extract_from_page(n_soup))
 
-            if beta_res.status_code == 200:
-                beta_soup = BeautifulSoup(beta_res.text, 'html.parser')
+        # Resolve redirectors (follow codedew to get workers.dev links)
+        final_links = {}
+        indicators = ['workers.dev', 'homelander', 'flashzipper', 'streamwish', 'filepress', 'gdflix', 'streamtape', 'pixeldra.in']
 
-                for tag in beta_soup.find_all(['a', 'button']):
-                    text_content = tag.text.strip().lower()
-                    version_match = re.search(r'(?:v|version|player|server|stream)\s*[-_]?\s*([12])', text_content)
+        for vk, vu in v_links.items():
+            if any(ind in vu.lower() for ind in indicators):
+                 final_links[vk] = vu
+            elif "codedew.com" in vu:
+                 r_resp = robust_get(vu, referer=p_curr_url)
+                 if r_resp and r_resp.status_code == 200:
+                      r_soup = BeautifulSoup(r_resp.text, 'html.parser')
+                      # If this resolved page is ANOTHER redirector (zipper), follow it once more
+                      if "codedew.com/zipper" in str(r_resp.url):
+                           # Look for next hop
+                           next_h = None
+                           for a in r_soup.find_all(['a', 'button']):
+                                if any(x in a.text.lower() or x in a.get('href', '').lower() for x in ["streambeta", "stream", "watch"]):
+                                     next_h = a.get('href')
+                                     if next_h: break
+                           if next_h:
+                                r_resp = robust_get(next_h, referer=str(r_resp.url))
+                                if r_resp and r_resp.status_code == 200:
+                                     r_soup = BeautifulSoup(r_resp.text, 'html.parser')
 
-                    if version_match:
-                        v_num = version_match.group(1)
-                        potential_sources = [
-                            tag.get('data-link'), tag.get('data-url'),
-                            tag.get('data-href'), tag.get('onclick'), tag.get('href')
-                        ]
-                        for src in potential_sources:
-                            if src and isinstance(src, str) and "javascript" not in src.lower() and src != "#":
-                                url_match = re.search(r'(https?://[^\s"\']+)', src)
-                                if url_match:
-                                    if v_num == "1" and v1_link == "Not Found":
-                                        v1_link = url_match.group(1)
-                                    elif v_num == "2" and v2_link == "Not Found":
-                                        v2_link = url_match.group(1)
-                                    break
+                      rv_links = extract_from_page(r_soup)
+                      for rk, ru in rv_links.items():
+                           if any(ind in ru.lower() for ind in indicators):
+                                key = vk if vk != "v1" else rk
+                                if key not in final_links: final_links[key] = ru
 
-                all_script_urls = []
-                video_indicators = ['workers.dev', 'homelander', 'flashzipper', 'streamwish', 'filepress', 'gdflix', 'streamtape']
+        if final_links:
+            output.append(f"🌐 **Language/Section:** `{label}`")
+            for v in sorted(final_links.keys(), key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 99):
+                output.append(f"   ├ **{v}:** `{final_links[v]}`")
+            output.append("")
 
-                # Check for iframes in beta page
-                for iframe in beta_soup.find_all('iframe', src=True):
-                    if any(ind in iframe['src'].lower() for ind in video_indicators):
-                        all_script_urls.append(iframe['src'])
+    if len(output) <= 1:
+        return "❌ No video links discovered after scanning pathways."
 
-                for script in beta_soup.find_all('script'):
-                    if script.string:
-                        found_urls = re.findall(r'(https?://[^\s"\']+)', script.string)
-                        for url in found_urls:
-                            url_clean = url.split('"')[0].split("'")[0].rstrip(';').rstrip('\\')
-                            if any(ext in url_clean.lower() for ext in ['.js', '.css', '.png', 'analytics', 'google']):
-                                continue
-                            if any(ind in url_clean.lower() for ind in video_indicators):
-                                if url_clean not in all_script_urls:
-                                    all_script_urls.append(url_clean)
-
-                if v1_link == "Not Found" and len(all_script_urls) > 0:
-                    v1_link = all_script_urls[0]
-                if v2_link == "Not Found" and len(all_script_urls) > 1:
-                    v2_link = all_script_urls[1]
-
-            output.append(f"   ├ **v1:** `{v1_link}`")
-            output.append(f"   └ **v2:** `{v2_link}`\n")
-
-        return "\n".join(output)
-
-    except Exception as e:
-        logger.error(f"Scraper error: {e}")
-        return f"❌ Critical Scraper Error: `{str(e)}`"
+    return "\n".join(output)
 
 @Client.on_message(filters.command("b") & filters.private)
 async def zipper_command(client: Client, message: Message):
@@ -216,12 +222,9 @@ async def zipper_command(client: Client, message: Message):
     status = await message.reply_text("⏳ **Initializing Zipper Scraper...**\nConnecting to main redirect page...")
 
     try:
-        # Run the blocking scraper in a thread to keep the bot responsive
         result_text = await asyncio.to_thread(get_multi_lang_links, target_url)
-
         if not result_text:
             result_text = "❌ Error: Scraper returned no content."
-
         await status.edit_text(result_text, disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error handling /b command: {e}")
