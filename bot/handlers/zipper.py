@@ -12,19 +12,30 @@ def get_multi_lang_links(target_url: str):
     """
     Blocking scraper logic adapted from user script.
     """
-    my_scraper = cloudscraper.create_scraper()
+    # Create a more robust scraper instance
+    my_scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'android',
+            'mobile': True
+        }
+    )
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "max-age=0",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
 
     output = []
     output.append(f"🔍 **Zipper Scan Results**\n`{target_url[:30]}...`\n")
 
     try:
-        response = my_scraper.get(target_url, headers=headers, timeout=15)
+        response = my_scraper.get(target_url, headers=headers, timeout=20)
         if response.status_code != 200:
-            return f"❌ Failed to connect: Status {response.status_code}"
+            return f"❌ Failed to connect to main page: Status {response.status_code}\nURL: `{target_url}`"
 
         soup = BeautifulSoup(response.text, 'html.parser')
         languages_found = {}
@@ -46,12 +57,22 @@ def get_multi_lang_links(target_url: str):
             # Fallback: Check if the current page is a direct language page
             # Look for streambeta link in the current page
             streambeta_url = None
-            for a_tag in soup.find_all('a', href=True):
+            for a_tag in soup.find_all(['a', 'button']):
                 tag_text = a_tag.text.lower().strip()
-                tag_href = a_tag['href'].lower().strip()
-                if "streambeta" in tag_text or "streambeta" in tag_href:
-                    streambeta_url = a_tag['href']
-                    break
+                tag_href = a_tag.get('href', '').lower().strip()
+                tag_onclick = a_tag.get('onclick', '').lower().strip()
+
+                if any(x in tag_text or x in tag_href or x in tag_onclick for x in ["streambeta", "stream", "watch", "player"]):
+                    if "http" in tag_href:
+                        streambeta_url = a_tag['href']
+                    elif "http" in tag_onclick:
+                        match = re.search(r'(https?://[^\s"\']+)', tag_onclick)
+                        if match: streambeta_url = match.group(1)
+                    if streambeta_url: break
+
+            if not streambeta_url:
+                iframe = soup.find('iframe', src=re.compile(r'streambeta|player|stream'))
+                if iframe: streambeta_url = iframe['src']
 
             if streambeta_url:
                 # Infer language from URL or title
@@ -67,27 +88,48 @@ def get_multi_lang_links(target_url: str):
             output.append(f"🌐 **Language:** `{lang_name}`")
 
             headers['Referer'] = target_url
-            lang_res = my_scraper.get(lang_url, headers=headers, timeout=15)
-            if lang_res.status_code != 200:
-                output.append(f"   └ ❌ Failed to open language page.\n")
+            try:
+                lang_res = my_scraper.get(lang_url, headers=headers, timeout=20)
+                if lang_res.status_code != 200:
+                    output.append(f"   └ ❌ Failed to open language page (Status {lang_res.status_code}).\n")
+                    continue
+            except Exception as e:
+                output.append(f"   └ ❌ Error opening language page: `{str(e)[:50]}`\n")
                 continue
 
             lang_soup = BeautifulSoup(lang_res.text, 'html.parser')
             streambeta_url = None
 
-            for a_tag in lang_soup.find_all('a', href=True):
+            for a_tag in lang_soup.find_all(['a', 'button'], href=True):
                 tag_text = a_tag.text.lower().strip()
-                tag_href = a_tag['href'].lower().strip()
-                if "streambeta" in tag_text or "streambeta" in tag_href:
-                    streambeta_url = a_tag['href']
-                    break
+                tag_href = a_tag.get('href', '').lower().strip()
+                tag_onclick = a_tag.get('onclick', '').lower().strip()
+
+                if any(x in tag_text or x in tag_href or x in tag_onclick for x in ["streambeta", "stream", "watch", "player"]):
+                    if "http" in tag_href:
+                        streambeta_url = a_tag['href']
+                    elif "http" in tag_onclick:
+                        match = re.search(r'(https?://[^\s"\']+)', tag_onclick)
+                        if match: streambeta_url = match.group(1)
+
+                    if streambeta_url: break
 
             if not streambeta_url:
-                output.append(f"   └ ❌ StreamBeta link not found.\n")
+                # Last resort: look for iframes
+                iframe = lang_soup.find('iframe', src=re.compile(r'streambeta|player|stream'))
+                if iframe:
+                    streambeta_url = iframe['src']
+
+            if not streambeta_url:
+                output.append(f"   └ ❌ StreamBeta/Player link not found.\n")
                 continue
 
             headers['Referer'] = lang_url
-            beta_res = my_scraper.get(streambeta_url, headers=headers, timeout=15)
+            try:
+                beta_res = my_scraper.get(streambeta_url, headers=headers, timeout=20)
+            except Exception as e:
+                output.append(f"   └ ❌ Error opening StreamBeta page: `{str(e)[:50]}`\n")
+                continue
 
             v1_link = "Not Found"
             v2_link = "Not Found"
@@ -116,7 +158,12 @@ def get_multi_lang_links(target_url: str):
                                     break
 
                 all_script_urls = []
-                video_indicators = ['workers.dev', 'homelander', 'flashzipper', 'streamwish']
+                video_indicators = ['workers.dev', 'homelander', 'flashzipper', 'streamwish', 'filepress', 'gdflix', 'streamtape']
+
+                # Check for iframes in beta page
+                for iframe in beta_soup.find_all('iframe', src=True):
+                    if any(ind in iframe['src'].lower() for ind in video_indicators):
+                        all_script_urls.append(iframe['src'])
 
                 for script in beta_soup.find_all('script'):
                     if script.string:
