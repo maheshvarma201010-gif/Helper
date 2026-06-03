@@ -43,7 +43,25 @@ def get_multi_lang_links(target_url: str):
                     languages_found["Telugu"] = link_href
 
         if not languages_found:
-            return "❌ No language download links found on this page layout."
+            # Fallback: Check if the current page is a direct language page
+            # Look for streambeta link in the current page
+            streambeta_url = None
+            for a_tag in soup.find_all('a', href=True):
+                tag_text = a_tag.text.lower().strip()
+                tag_href = a_tag['href'].lower().strip()
+                if "streambeta" in tag_text or "streambeta" in tag_href:
+                    streambeta_url = a_tag['href']
+                    break
+
+            if streambeta_url:
+                # Infer language from URL or title
+                lang_name = "Detected"
+                if "/hindi/" in target_url.lower(): lang_name = "Hindi"
+                elif "/tamil/" in target_url.lower(): lang_name = "Tamil"
+                elif "/telugu/" in target_url.lower(): lang_name = "Telugu"
+                languages_found[lang_name] = target_url
+            else:
+                return "❌ No language download links or StreamBeta endpoints found on this page."
 
         for lang_name, lang_url in languages_found.items():
             output.append(f"🌐 **Language:** `{lang_name}`")
