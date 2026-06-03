@@ -14,8 +14,6 @@ services:
         sync: false
       - key: MONGO_URI
         sync: false
-      - key: STRING_SESSION
-        sync: false
       - key: LOG_CHANNEL
         sync: false
       - key: OWNER_ID
