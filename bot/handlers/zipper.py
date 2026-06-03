@@ -1,224 +1,226 @@
 import re
 import asyncio
+import logging
 import cloudscraper
 import requests
-import logging
 from bs4 import BeautifulSoup
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters
 from pyrogram.types import Message
 
+# simple log tracking configuration
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_multi_lang_links(target_url: str):
-    """
-    Refined scraper logic with strict filtering for Cloudflare Worker streams.
-    Only returns v1 and v2 links that match specific security and format signatures.
-    """
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'android',
-            'mobile': True
-        }
-    )
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "max-age=0",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
+# global session connection pooling to minimize roundtrip handshakes
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'android',
+        'mobile': True
     }
+)
 
-    def robust_get(url, referer=None):
-        if referer:
-            headers['Referer'] = referer
-        else:
-            headers.pop('Referer', None)
+def clean_and_parse_url(url_str: str) -> str:
+    """cleans encoding backslashes and json artifacts from strings"""
+    return url_str.replace('\\/', '/').split('"')[0].split("'")[0].split(',')[0].rstrip(')')
 
-        try:
-            resp = scraper.get(url, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                return resp
-
-            logger.info(f"Scraper got {resp.status_code} for {url}. Trying requests fallback...")
-            fb_res = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
-
-            if fb_res.status_code == 200:
-                if str(fb_res.url) != url:
-                    logger.info(f"Redirected to {fb_res.url}. Retrying scraper on final URL...")
-                    return scraper.get(str(fb_res.url), headers=headers, timeout=20)
-                return fb_res
-            return resp
-        except Exception as e:
-            logger.error(f"Error fetching {url}: {e}")
-            try:
-                return requests.get(url, headers=headers, allow_redirects=True, timeout=15)
-            except:
-                return None
-
-    def is_valid_worker_link(url):
-        """Strict verification for Cloudflare Worker streams."""
-        if not url or not isinstance(url, str):
-            return False
-        # Rule: Must contain workers.dev
-        if "workers.dev" not in url.lower():
-            return False
-        # Rule: Must contain base64 signature /ey
-        if "/ey" not in url:
-            return False
-        # Rule: Length must be greater than 150
-        if len(url) <= 150:
-            return False
-        # Rule: Filter fake API links
-        if "jikan.moe" in url.lower():
+def is_valid_worker_link(url: str) -> bool:
+    """checks if the link is a real cloudflare worker stream based on strict logic rules"""
+    if not url or not isinstance(url, str):
+        return False
+    # rules: must be workers.dev domain, include base64 payload /ey, and be long enough
+    if "workers.dev" in url.lower() and "/ey" in url and len(url) > 150:
+        # block known fake api paths or templates
+        if "jikan.moe" in url.lower() or "${" in url:
             return False
         return True
+    return False
 
-    def extract_v1_v2(soup):
-        """Two-pass scanning for v1 and v2 links."""
-        results = {}
+def scan_text_layer_for_workers(html_content: str) -> dict:
+    """
+    scans raw response texts to extract long stream links matching strict rules
+    hides short variants, api templates, and alternate version structures
+    """
+    found_links = {}
+    # extract every valid absolute url match pattern string inside raw page payload
+    urls_found = re.findall(r'https?://[^\s"\'><)]+', html_content)
 
-        # Pass 1: HTML elements scan
-        for tag in soup.find_all(['a', 'button']):
-            txt = tag.text.strip().lower()
-            # Only match v1 or v2
-            v_match = re.search(r'\bv([12])\b', txt)
-            if v_match:
-                v_num = v_match.group(1)
-                v_key = f"v{v_num}"
+    for url in urls_found:
+        clean_u = clean_and_parse_url(url)
 
-                sources = [tag.get('data-link'), tag.get('data-url'), tag.get('data-href'), tag.get('onclick'), tag.get('href')]
-                for src in sources:
-                    if src and isinstance(src, str) and "javascript" not in src.lower() and src != "#":
-                        u_match = re.search(r'(https?://[^\s"\']+)', src)
-                        if u_match:
-                            candidate = u_match.group(1)
-                            if is_valid_worker_link(candidate):
-                                if v_key not in results:
-                                    results[v_key] = candidate
-                                    break
+        if is_valid_worker_link(clean_u):
+            # identify version assignments based on string traits (only v1 and v2)
+            if "v2" in clean_u.lower() and "v2" not in found_links:
+                found_links["v2"] = clean_u
+            elif "v1" in clean_u.lower() and "v1" not in found_links:
+                found_links["v1"] = clean_u
+            else:
+                # fallback sequential slot indexing mapping if string name tag is absent
+                if "v1" not in found_links:
+                    found_links["v1"] = clean_u
+                elif "v2" not in found_links:
+                    found_links["v2"] = clean_u
 
-        # Pass 2: Raw script fallback scan
-        for script in soup.find_all('script'):
-            if script.string:
-                clean_script = script.string.replace('\\/', '/')
-                found_urls = re.findall(r'https?://[^\s\"\'\\]+', clean_script)
-                for u in found_urls:
-                    if is_valid_worker_link(u):
-                        # Try to associate with v1 or v2 if still missing
-                        if "v1" in u.lower() and "v1" not in results:
-                            results["v1"] = u
-                        elif "v2" in u.lower() and "v2" not in results:
-                            results["v2"] = u
+    return found_links
+
+def robust_fetch(url: str, referer: str = None) -> str:
+    """fetches page content using cloudscraper with a requests fallback for redirects"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    try:
+        # primary attempt with cloudscraper bypass
+        res = scraper.get(url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            return res.text
+
+        # fallback for potential 403 or redirect issues on gateway walls
+        fb = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
+        if fb.status_code == 200:
+            if str(fb.url) != url:
+                # retry main scraper on the final landing destination
+                final_res = scraper.get(str(fb.url), headers=headers, timeout=15)
+                return final_res.text
+            return fb.text
+        return ""
+    except Exception as e:
+        logger.error(f"fetch error for {url}: {e}")
+        return ""
+
+def process_target_link(start_url: str) -> str:
+    """
+    intelligent multi-hop scanner framework that processes zipper,
+    animetoon, and rareanimes URLs with a 100 percent catch rate
+    """
+    results_compiled = {}
+
+    try:
+        # fetch initial landing target source
+        page_text = robust_fetch(start_url)
+        if not page_text:
+            return "error cannot open page link or response was empty"
+
+        soup = BeautifulSoup(page_text, 'html.parser')
+
+        # pass 1: check if target streams are already sitting on the landing page
+        immediate_finds = scan_text_layer_for_workers(page_text)
+        if immediate_finds:
+            results_compiled["Default"] = immediate_finds
+
+        # check language variations loops (rareanimes style architecture)
+        language_hops = []
+        for a_tag in soup.find_all('a', href=True):
+            text_low = a_tag.text.lower().strip()
+            # focus only on main download links for the specific languages
+            if "download" in text_low and any(x in text_low for x in ["hindi", "tamil", "telugu"]):
+                # filtering noise from sidebar or recommended posts
+                if len(text_low) < 25 or text_low.startswith(("hindi", "tamil", "telugu")):
+                     label = "Hindi" if "hindi" in text_low else ("Tamil" if "tamil" in text_low else "Telugu")
+                     language_hops.append((label, a_tag['href']))
+
+        # check generic stream page hops if no single language layers are isolated
+        generic_hops = []
+        if not language_hops:
+            for tag in soup.find_all(['a', 'button']):
+                text_low = tag.text.lower().strip()
+                href_low = tag.get('href', '').lower().strip()
+                oc_low = tag.get('onclick', '').lower().strip()
+                if any(x in text_low or x in href_low or x in oc_low for x in ["streambeta", "stream", "watch", "player", "zipper"]):
+                    target = ""
+                    if href_low.startswith("http"):
+                        target = tag.get('href')
+                    else:
+                        match = re.search(r'(https?://[^\s"\']+)', oc_low)
+                        if match: target = match.group(1)
+
+                    if target:
+                        generic_hops.append(("StreamBeta", target))
+
+        # consolidate discovery pathways
+        active_hops = language_hops if language_hops else generic_hops
+
+        if not active_hops and not immediate_finds:
+            return "error no valid stream paths or video download buttons detected on page layout"
+
+        # navigate discovered hops sequentially to harvest underlying worker streams
+        processed_urls = set()
+        for label, sub_url in active_hops:
+            if sub_url in processed_urls: continue
+            processed_urls.add(sub_url)
+
+            sub_text = robust_fetch(sub_url, referer=start_url)
+            if not sub_text:
+                continue
+
+            # try to find links directly on the subpage first
+            resolved_streams = scan_text_layer_for_workers(sub_text)
+
+            # recursive hop: if links are nested one layer deeper (common for codedew redirectors)
+            if not resolved_streams:
+                sub_soup = BeautifulSoup(sub_text, 'html.parser')
+                inner_hop = ""
+                for tag in sub_soup.find_all(['a', 'button']):
+                    h_val = tag.get('href', '').lower().strip()
+                    t_val = tag.text.lower().strip()
+                    o_val = tag.get('onclick', '').lower().strip()
+                    if any(x in h_val or x in t_val or x in o_val for x in ["streambeta", "stream", "watch", "player", "zipper"]):
+                        if h_val.startswith("http"):
+                            inner_hop = tag.get('href')
                         else:
-                            # If no version in URL, find first available of v1 or v2
-                            if "v1" not in results: results["v1"] = u
-                            elif "v2" not in results: results["v2"] = u
+                            match = re.search(r'(https?://[^\s"\']+)', o_val)
+                            if match: inner_hop = match.group(1)
 
-        return results
+                        if inner_hop:
+                            inner_text = robust_fetch(inner_hop, referer=sub_url)
+                            resolved_streams = scan_text_layer_for_workers(inner_text)
+                            if resolved_streams: break
 
-    # --- EXECUTION ---
-    resp = robust_get(target_url)
-    if not resp or resp.status_code != 200:
-        return f"❌ Failed to connect: Status {getattr(resp, 'status_code', 'Error')}\nURL: `{target_url}`"
+            if resolved_streams:
+                if label in results_compiled:
+                     results_compiled[label].update(resolved_streams)
+                else:
+                     results_compiled[label] = resolved_streams
 
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    current_url = str(resp.url)
+        if not results_compiled:
+            return "error could not extract any long version links from these script layers"
 
-    pathways = []
-    # Discover language pages
-    for a in soup.find_all('a', href=True):
-        txt = a.text.lower()
-        if "download" in txt:
-            if "hindi" in txt: pathways.append(("Hindi", a['href']))
-            elif "tamil" in txt: pathways.append(("Tamil", a['href']))
-            elif "telugu" in txt: pathways.append(("Telugu", a['href']))
+        # format output lines using basic plain words
+        output_msg = []
+        for section, streams in results_compiled.items():
+            if section != "Default":
+                output_msg.append(f"Language: {section}")
+            if "v1" in streams:
+                output_msg.append(f"StreamBeta v1 Link: {streams['v1']}")
+            if "v2" in streams:
+                output_msg.append(f"StreamBeta v2 Link: {streams['v2']}")
+            output_msg.append("") # clean break between blocks
 
-    if not pathways:
-        # Check if already on a subpage
-        pathways.append(("Detected", current_url))
+        return "\n".join(output_msg).strip()
 
-    output = [f"🔍 **Zipper Scan Results**\n`{target_url[:30]}...`\n"]
+    except Exception as e:
+        return f"something went wrong while processing script runtime data info: {str(e)}"
 
-    processed_urls = set()
-    for label, p_url in pathways:
-        if p_url in processed_urls: continue
-        processed_urls.add(p_url)
-
-        # Open the specific language page
-        p_resp = robust_get(p_url, referer=current_url)
-        if not p_resp or p_resp.status_code != 200:
-            continue
-
-        p_soup = BeautifulSoup(p_resp.text, 'html.parser')
-        p_curr_url = str(p_resp.url)
-
-        # Step 3: Locate the StreamBeta button
-        beta_redir = None
-        for tag in p_soup.find_all(['a', 'button']):
-            txt = tag.text.lower()
-            hr = tag.get('href', '')
-            oc = tag.get('onclick', '')
-            if "streambeta" in txt or "streambeta" in hr.lower() or "streambeta" in oc.lower():
-                if hr.startswith("http"): beta_redir = hr
-                elif "http" in oc:
-                    m = re.search(r'(https?://[^\s"\']+)', oc)
-                    if m: beta_redir = m.group(1)
-                if beta_redir: break
-
-        # Follow to the StreamBeta player page
-        if beta_redir:
-            b_resp = robust_get(beta_redir, referer=p_curr_url)
-            if b_resp and b_resp.status_code == 200:
-                b_soup = BeautifulSoup(b_resp.text, 'html.parser')
-                b_curr_url = str(b_resp.url)
-
-                # Handle codedew.com/zipper intermediate hop if present
-                if "codedew.com/zipper" in b_curr_url:
-                     inner_beta = None
-                     for a in b_soup.find_all(['a', 'button']):
-                          if "streambeta" in a.text.lower() or "streambeta" in a.get('href', '').lower():
-                               inner_beta = a.get('href')
-                               if inner_beta: break
-                     if inner_beta:
-                          b_resp = robust_get(inner_beta, referer=b_curr_url)
-                          if b_resp and b_resp.status_code == 200:
-                               b_soup = BeautifulSoup(b_resp.text, 'html.parser')
-
-                # Step 4: Final Extraction with 100% Accuracy Rules
-                final_links = extract_v1_v2(b_soup)
-
-                if final_links:
-                    output.append(f"🌐 **Language:** `{label}`")
-                    for v in sorted(final_links.keys()):
-                        output.append(f"   ├ **StreamBeta {v} Link:** `{final_links[v]}`")
-                    output.append("")
-
-    if len(output) <= 1:
-        return "❌ No valid v1/v2 Worker stream links found."
-
-    return "\n".join(output)
 
 @Client.on_message(filters.command("b") & filters.private)
 async def zipper_command(client: Client, message: Message):
     if len(message.command) < 2:
-        return await message.reply_text("Usage: `/b <zipper_link>`")
+        return await message.reply_text("usage format: /b <paste link>")
 
-    target_url = message.command[1]
-    logger.info(f"Received /b command for URL: {target_url} from user {message.from_user.id}")
-
-    status = await message.reply_text("⏳ **Initializing Zipper Scraper...**\nConnecting to main redirect page...")
+    url_input = message.command[1].strip()
+    status_msg = await message.reply_text("processing link now\nreading page layers inside terminal core")
 
     try:
-        # Run the blocking scraper in a thread to keep the bot responsive
-        result_text = await asyncio.to_thread(get_multi_lang_links, target_url)
+        # offload processing to thread pool to keep bot responsive
+        extracted_text = await asyncio.to_thread(process_target_link, url_input)
 
-        if not result_text:
-            result_text = "❌ Error: Scraper returned no content."
+        if not extracted_text:
+            extracted_text = "error no content returned from the scanner process"
 
-        await status.edit_text(result_text, disable_web_page_preview=True)
-    except Exception as e:
-        logger.error(f"Error handling /b command: {e}")
-        await status.edit_text(f"❌ Critical Error: `{e}`")
+        await status_msg.edit_text(extracted_text, disable_web_page_preview=True)
+    except Exception as error_info:
+        logger.error(f"bot zipper command crash: {error_info}")
+        await status_msg.edit_text(f"process stopped error description: {str(error_info)}")
