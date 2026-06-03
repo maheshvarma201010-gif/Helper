@@ -11,7 +11,6 @@ async def start_command(client, message):
         "📜 **Command List:**\n"
         "• /start - Show this welcome message\n"
         "• /search `<query>` - Search indexed channel content\n"
-        "• /b `<link>` - Multi-language link scraper\n"
         "• /sequence - Start collecting files for automatic sorting\n"
         "• /sort - Finish collection and sort files (Sequencer Mode)\n"
         "• /replace - Bulk replace text/links in channel messages\n"

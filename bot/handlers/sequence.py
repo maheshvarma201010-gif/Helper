@@ -1,14 +1,11 @@
 import asyncio
 import time
 import logging
-from pyrogram import Client, filters, errors, enums
-from pyrogram.types import Message, CallbackQuery
+from pyrogram import Client, filters, errors
+from pyrogram.types import Message
 from bot.database.mongo import db
 from bot.utils.parser import get_metadata
 from bot.utils.sorter import sort_files
-from bot.utils.helpers import get_font_markup
-from bot.utils.stylizer import stylize_text
-from bot.utils.replacer import render_message_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +29,7 @@ async def sequence_command(client, message):
     # Save the status message ID in sequence job to update it later
     await db.update_replace_data(user_id, {"status_msg_id": status.id})
 
-@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain", "b"]))
+@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain"]))
 async def collect_files(client, message: Message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -97,67 +94,32 @@ async def sort_command(client, message):
         await db.update_user_state(user_id, None)
         return
 
-    await message.reply_text(
-        f"📊 **Collected {len(files)} files.**\nSelect a font style for the captions before I deliver them:",
-        reply_markup=get_font_markup("seq_sort")
-    )
-
-@Client.on_callback_query(filters.regex(r"^font:seq_sort:"))
-async def sequence_sort_callback(client: Client, callback: CallbackQuery):
-    await callback.answer()
-    user_id = callback.from_user.id
-    font = callback.data.split(":")[2]
-
-    files = await db.get_sequence_files(user_id)
-    if not files:
-        return await callback.message.edit_text("⚠️ Collection data lost. Please start over.")
-
-    await callback.message.edit_text(f"🚀 **Applying font `{font}` and sorting...**")
+    status = await message.reply_text("🚀 **Sorting and delivering files...**")
 
     # Sort files: Season -> Quality -> Episode
     try:
         sorted_list = sort_files(files)
     except Exception as e:
         logger.error(f"Sorting error: {e}")
-        return await callback.message.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
+        return await status.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
 
-    await callback.message.edit_text(f"📦 **Delivering {len(sorted_list)} files with stylized captions...**")
+    await status.edit_text(f"📦 **Delivering {len(sorted_list)} files with original formatting...**")
 
     count = 0
     for file_info in sorted_list:
         try:
-            # Re-fetch the message to ensure we have current entities
-            msg = await client.get_messages(callback.message.chat.id, file_info["message_id"])
-
-            caption = msg.caption or ""
-            entities = msg.caption_entities
-
-            if caption:
-                # Render to HTML and then stylize
-                html_caption = render_message_to_html(caption, entities)
-                new_caption = stylize_text(html_caption, font, is_button=False)
-
-                # Send the media with the NEW stylized caption
-                # Preserve media caption position (above/below)
-                invert = getattr(msg, "invert_media", False)
-                if msg.video:
-                    await client.send_video(callback.message.chat.id, msg.video.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
-                elif msg.document:
-                    await client.send_document(callback.message.chat.id, msg.document.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
-                elif msg.audio:
-                    await client.send_audio(callback.message.chat.id, msg.audio.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
-                elif msg.animation:
-                    await client.send_animation(callback.message.chat.id, msg.animation.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
-            else:
-                # No caption, just copy
-                await client.copy_message(callback.message.chat.id, callback.message.chat.id, file_info["message_id"])
-
+            # Use copy_message to preserve original caption, entities and media layout
+            await client.copy_message(
+                chat_id=user_id,
+                from_chat_id=user_id,
+                message_id=file_info["message_id"]
+            )
             count += 1
             await asyncio.sleep(0.3)
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)
-            # Simple retry
-            await client.copy_message(callback.message.chat.id, callback.message.chat.id, file_info["message_id"])
+            # Retry
+            await client.copy_message(user_id, user_id, file_info["message_id"])
             count += 1
         except Exception as e:
             logger.warning(f"Failed to send file {file_info.get('message_id')}: {e}")
@@ -165,9 +127,8 @@ async def sequence_sort_callback(client: Client, callback: CallbackQuery):
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
 
-    await callback.message.reply_text(
+    await status.reply_text(
         f"🏁 **Sequencing Finished!**\n\n"
         f"✅ **Total Files Organized:** `{count}`\n"
-        f"📁 **Font Applied:** `{font}`\n"
         f"📁 **Status:** `Success` 🧬"
     )
