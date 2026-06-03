@@ -14,8 +14,8 @@ async def index_channel(client, chat_id, progress_msg=None):
         count = 0
 
         async for message in client.get_chat_history(chat_id, offset_id=latest_id, reverse=True):
-            if message.video or message.document or message.audio or message.animation:
-                file_obj = message.video or message.document or message.audio or message.animation
+            if message.video or message.document or message.audio or message.animation or message.photo:
+                file_obj = message.video or message.document or message.audio or message.animation or message.photo
                 filename = getattr(file_obj, "file_name", "Unknown")
                 caption = message.caption or ""
 

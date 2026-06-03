@@ -53,6 +53,40 @@ SPECIAL_CHARS = {
     }
 }
 
+# Build reverse map for destylization
+REVERSE_MAP = {}
+for style, mapping in FONTS.items():
+    for char_start, unicode_start in mapping.items():
+        if unicode_start is None: continue
+        count = 10 if char_start.isdigit() else 26
+        for i in range(count):
+            REVERSE_MAP[chr(unicode_start + i)] = chr(ord(char_start) + i)
+
+for style, mapping in SPECIAL_CHARS.items():
+    for char, code in mapping.items():
+        REVERSE_MAP[chr(code)] = char
+
+def destylize(text):
+    if not text:
+        return text
+
+    # Regex to identify HTML tags and HTML entities
+    tag_entity_pattern = r'(<[^>]+>|&[a-zA-Z0-9#]+;)'
+    parts = re.split(tag_entity_pattern, text)
+    result = []
+
+    for part in parts:
+        if not part: continue
+        if part.startswith('<') and part.endswith('>'):
+            result.append(part)
+        elif part.startswith('&') and part.endswith(';'):
+            result.append(part)
+        else:
+            # Map stylized characters back to ASCII
+            result.append("".join(REVERSE_MAP.get(c, c) for c in part))
+
+    return "".join(result)
+
 def get_char(char, style):
     if style not in FONTS:
         return char
@@ -73,19 +107,33 @@ def get_char(char, style):
     return char
 
 def stylize_text(text, style, is_button=False):
-    if not text or not style or style == "normal":
+    if not text or not style:
         return text
+
+    # Always destylize first to ensure we aren't layering fonts
+    text = destylize(text)
+
+    # To be safe and "change" the font, we'll strip basic formatting tags
+    # but keep links and others.
+    clean_text = re.sub(r'<(?:b|i|code|s|u)>', '', text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'</(?:b|i|code|s|u)>', '', clean_text, flags=re.IGNORECASE)
+
+    if style == "normal":
+        return clean_text
 
     # Use native Telegram tags for bold, italic, and mono if not in a button
     if not is_button:
         if style == "bold":
-            return f"<b>{text}</b>"
+            return f"<b>{clean_text}</b>"
         elif style == "italic":
-            return f"<i>{text}</i>"
+            return f"<i>{clean_text}</i>"
         elif style == "mono":
-            return f"<code>{text}</code>"
+            return f"<code>{clean_text}</code>"
         elif style == "bold_italic":
-            return f"<b><i>{text}</i></b>"
+            return f"<b><i>{clean_text}</i></b>"
+
+        # If it's a Unicode style for a message, use the clean_text for the rest of processing
+        text = clean_text
 
     # We need to track if we are inside an <a> tag to avoid double-wrapping links
     in_anchor = False

@@ -51,7 +51,7 @@ async def font_cmd(client, message: Message):
         reply_markup=get_font_markup(f"apply:{first_id}:{last_id}", chat_id)
     )
 
-@Client.on_callback_query(filters.regex(r"^font:"))
+@Client.on_callback_query(filters.regex(r"^font:(set|apply):"))
 async def font_callback(client: Client, callback: CallbackQuery):
     await callback.answer() # Stop loading spinner
     data = callback.data.split(":")
