@@ -148,11 +148,19 @@ async def zipper_command(client: Client, message: Message):
     if len(message.command) < 2:
         return await message.reply_text("Usage: `/b <zipper_link>`")
 
-    target_url = message.text.split(None, 1)[1]
+    target_url = message.command[1]
+    logger.info(f"Received /b command for URL: {target_url} from user {message.from_user.id}")
 
-    status = await message.reply_text("⏳ **Connecting to main zipper redirect page...**")
+    status = await message.reply_text("⏳ **Initializing Zipper Scraper...**\nConnecting to main redirect page...")
 
-    # Run the blocking scraper in a thread to keep the bot responsive
-    result_text = await asyncio.to_thread(get_multi_lang_links, target_url)
+    try:
+        # Run the blocking scraper in a thread to keep the bot responsive
+        result_text = await asyncio.to_thread(get_multi_lang_links, target_url)
 
-    await status.edit_text(result_text, disable_web_page_preview=True)
+        if not result_text:
+            result_text = "❌ Error: Scraper returned no content."
+
+        await status.edit_text(result_text, disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Error handling /b command: {e}")
+        await status.edit_text(f"❌ Critical Error: `{e}`")

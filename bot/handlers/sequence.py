@@ -32,7 +32,7 @@ async def sequence_command(client, message):
     # Save the status message ID in sequence job to update it later
     await db.update_replace_data(user_id, {"status_msg_id": status.id})
 
-@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain"]))
+@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain", "b"]))
 async def collect_files(client, message: Message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
