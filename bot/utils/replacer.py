@@ -22,7 +22,7 @@ def replace_in_buttons(reply_markup, old_text, new_text, stylize_font=None):
         for button in row:
             new_btn_text = replace_text(button.text, old_text, new_text)
             if stylize_font:
-                new_btn_text = stylize_text(new_btn_text, stylize_font)
+                new_btn_text = stylize_text(new_btn_text, stylize_font, is_button=True)
 
             if button.url:
                 new_url = replace_text(button.url, old_text, new_text)

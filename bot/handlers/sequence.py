@@ -94,7 +94,7 @@ async def sort_command(client, message):
         await db.update_user_state(user_id, None)
         return
 
-    status_msg = await message.reply_text(f"⏳ **Processing {len(files)} files...**\nSorting by Season → Quality → Episode.")
+    status_msg = await message.reply_text(f"🏮 **Processing {len(files)} files...**\n`Sorting by Season → Quality → Episode` ⚡")
 
     # Sort files: Season -> Quality -> Episode
     try:
@@ -103,7 +103,7 @@ async def sort_command(client, message):
         logger.error(f"Sorting error: {e}")
         return await status_msg.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
 
-    await status_msg.edit_text(f"✅ **Sorting Complete!**\nNow sending {len(sorted_list)} files back to you...")
+    await status_msg.edit_text(f"✨ **Sorting Complete!**\n`Now delivering {len(sorted_list)} files back to your archive...` 📦")
 
     count = 0
     for file_info in sorted_list:
@@ -114,7 +114,7 @@ async def sort_command(client, message):
                 message_id=file_info["message_id"]
             )
             count += 1
-            # Exponential backoff or simple delay to avoid flood
+            # Simple delay to avoid flood
             await asyncio.sleep(0.3)
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)
@@ -129,6 +129,7 @@ async def sort_command(client, message):
 
     await message.reply_text(
         f"🏁 **Sequencing Finished!**\n\n"
-        f"✅ Total files sent: `{count}`\n"
-        f"📁 All files have been organized perfectly."
+        f"✅ **Total Files Organized:** `{count}`\n"
+        f"📁 **Status:** `Success` 🧬\n\n"
+        f"**Your media archive is now perfectly ordered.**"
     )

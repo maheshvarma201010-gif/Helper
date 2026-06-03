@@ -72,9 +72,20 @@ def get_char(char, style):
 
     return char
 
-def stylize_text(text, style):
+def stylize_text(text, style, is_button=False):
     if not text or not style or style == "normal":
         return text
+
+    # Use native Telegram tags for bold, italic, and mono if not in a button
+    if not is_button:
+        if style == "bold":
+            return f"<b>{text}</b>"
+        elif style == "italic":
+            return f"<i>{text}</i>"
+        elif style == "mono":
+            return f"<code>{text}</code>"
+        elif style == "bold_italic":
+            return f"<b><i>{text}</i></b>"
 
     # We need to track if we are inside an <a> tag to avoid double-wrapping links
     in_anchor = False

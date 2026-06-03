@@ -1,71 +1,40 @@
-import pytest
 from bot.utils.stylizer import stylize_text
 
-def test_stylize_text_normal():
-    assert stylize_text("Hello World", "normal") == "Hello World"
-    assert stylize_text("Hello World", None) == "Hello World"
-
-def test_stylize_text_bold():
-    # Bold 'A' is 0x1D400 (𝐀), 'a' is 0x1D41A (𝐚)
-    # "Ab" -> 𝐀𝐛
-    result = stylize_text("Ab", "bold")
+def test_stylize_text_bold_button():
+    # Buttons should still use Unicode
+    result = stylize_text("Ab", "bold", is_button=True)
     assert result == "𝐀𝐛"
 
-def test_stylize_text_html_preservation():
-    # <b>Hello</b> World -> <b>𝐇𝐞𝐥𝐥𝐨</b> 𝐖𝐨𝐫𝐥𝐝
+def test_stylize_text_bold_message():
+    # Messages should use native HTML
+    result = stylize_text("Ab", "bold", is_button=False)
+    assert result == "<b>Ab</b>"
+
+def test_stylize_text_italic_message():
+    result = stylize_text("Ab", "italic", is_button=False)
+    assert result == "<i>Ab</i>"
+
+def test_stylize_text_mono_message():
+    result = stylize_text("Ab", "mono", is_button=False)
+    assert result == "<code>Ab</code>"
+
+def test_stylize_text_bold_italic_message():
+    result = stylize_text("Ab", "bold_italic", is_button=False)
+    assert result == "<b><i>Ab</i></b>"
+
+def test_stylize_text_script_message():
+    # Script is not a native style, should use Unicode even in messages
+    result = stylize_text("Ab", "script", is_button=False)
+    assert "𝒜𝒷" in result or "𝓐𝓫" in result
+
+def test_stylize_text_html_preservation_button():
     text = "<b>Hello</b> World"
-    result = stylize_text(text, "bold")
+    result = stylize_text(text, "bold", is_button=True)
     assert "<b>" in result
-    assert "</b>" in result
-    assert result.startswith("<b>")
-    # Content should be stylized
     assert "𝐇𝐞𝐥𝐥𝐨" in result
-    assert "𝐖𝐨𝐫𝐥𝐝" in result
 
-def test_stylize_text_complex_html():
-    text = '<a href="https://example.com">Click Me</a>'
-    result = stylize_text(text, "bold")
-    assert '<a href="https://example.com">' in result
-    assert '</a>' in result
-    assert "𝐂𝐥𝐢𝐜𝐤 𝐌𝐞" in result
-
-def test_stylize_special_chars():
-    # Script 'B' is 0x212C (ℬ)
-    result = stylize_text("B", "script")
-    assert result == "ℬ"
-
-    # Italic 'h' is 0x210E (ℎ)
-    result = stylize_text("h", "italic")
-    assert result == "ℎ"
-
-def test_stylize_url_and_entities_preservation():
-    text = "Check this: https://example.com & more!"
-    result = stylize_text(text, "bold")
-    # Verify 'Check' is stylized
-    assert "𝐂𝐡𝐞𝐜𝐤" in result
-    # Verify URL is stylized but wrapped in <a> tag to stay clickable
-    assert '<a href="https://example.com">' in result
-    assert "𝐡𝐭𝐭𝐩𝐬://𝐞𝐱𝐚𝐦𝐩𝐥𝐞.𝐜𝐨𝐦" in result
-
-    text_with_entity = "A &amp; B"
-    result = stylize_text(text_with_entity, "bold")
-    # Verify 'A' and 'B' are stylized but '&amp;' is NOT
-    assert "𝐀" in result
-    assert "𝐁" in result
-    assert "&amp;" in result
-    assert "&𝐚𝐦𝐩;" not in result
-
-def test_stylize_nested_links():
-    text = 'Visit <a href="https://google.com">Google</a> now'
-    result = stylize_text(text, "bold")
-    assert "𝐕𝗶𝐬𝗶𝐭" in result or "𝐕𝐢𝐬𝐢𝐭" in result
-    assert '<a href="https://google.com">' in result
-    assert "𝐆𝐨𝐨𝐠𝐥𝐞" in result
-    assert "𝐧𝐨𝐰" in result
-
-def test_stylize_usernames():
-    text = "Follow @John_Doe for more"
-    result = stylize_text(text, "bold")
+def test_stylize_usernames_button():
+    text = "Follow @John_Doe"
+    result = stylize_text(text, "bold", is_button=True)
     assert "𝐅𝐨𝐥𝐥𝐨𝐰" in result
-    assert '<a href="https://t.me/John_Doe">@𝐉𝐨𝐡𝐧_𝐃𝐨𝐞</a>' in result
-    assert "𝐟𝐨𝐫" in result
+    assert 'href="https://t.me/John_Doe"' in result

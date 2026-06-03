@@ -163,7 +163,7 @@ async def process_msg_font(worker, chat_id, msg, font):
     if not current_html:
         return False
 
-    new_html = stylize_text(current_html, font)
+    new_html = stylize_text(current_html, font, is_button=False)
 
     new_reply_markup = None
     if msg.reply_markup:
