@@ -1,5 +1,7 @@
 import re
 import logging
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from bot.utils.stylizer import get_available_fonts
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +62,20 @@ async def resolve_chat(client, chat_id):
             except: pass
 
     raise ValueError(f"Could not resolve chat {chat_id}. Ensure the bot is an admin in the channel.")
+
+def get_font_markup(action, channel_id=None):
+    """
+    Generates a markup for font selection.
+    """
+    buttons = []
+    fonts = get_available_fonts()
+    # Chunk fonts into 2 per row
+    for i in range(0, len(fonts), 2):
+        row = []
+        for font in fonts[i:i+2]:
+            callback_data = f"font:{action}:{font}"
+            if channel_id:
+                callback_data += f":{channel_id}"
+            row.append(InlineKeyboardButton(font.replace("_", " ").title(), callback_data=callback_data))
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)

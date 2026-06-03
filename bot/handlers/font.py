@@ -3,27 +3,13 @@ import logging
 from pyrogram import Client, filters, enums, errors
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot.database.mongo import db
-from bot.utils.stylizer import stylize_text, get_available_fonts
-from bot.utils.helpers import resolve_chat, parse_message_link
+from bot.utils.stylizer import stylize_text
+from bot.utils.helpers import resolve_chat, parse_message_link, get_font_markup
 from bot.utils.replacer import render_message_to_html, replace_in_buttons
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
-# Font selection markup
-def get_font_markup(action, channel_id=None):
-    buttons = []
-    fonts = get_available_fonts()
-    # Chunk fonts into 2 per row
-    for i in range(0, len(fonts), 2):
-        row = []
-        for font in fonts[i:i+2]:
-            callback_data = f"font:{action}:{font}"
-            if channel_id:
-                callback_data += f":{channel_id}"
-            row.append(InlineKeyboardButton(font.replace("_", " ").title(), callback_data=callback_data))
-        buttons.append(row)
-    return InlineKeyboardMarkup(buttons)
 
 @Client.on_message(filters.command("fontchannel") & filters.user(Config.ADMINS))
 async def font_channel_cmd(client, message: Message):
@@ -174,7 +160,14 @@ async def process_msg_font(worker, chat_id, msg, font):
             if msg.text:
                 await worker.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
             else:
-                await worker.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                # Preserve media caption position (above/below)
+                invert = getattr(msg, "invert_media", False)
+                await worker.edit_message_caption(
+                    chat_id, msg.id, new_html,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_markup=new_reply_markup,
+                    invert_media=invert
+                )
             return True
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)

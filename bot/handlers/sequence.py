@@ -6,6 +6,9 @@ from pyrogram.types import Message
 from bot.database.mongo import db
 from bot.utils.parser import get_metadata
 from bot.utils.sorter import sort_files
+from bot.utils.helpers import get_font_markup
+from bot.utils.stylizer import stylize_text
+from bot.utils.replacer import render_message_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -94,32 +97,67 @@ async def sort_command(client, message):
         await db.update_user_state(user_id, None)
         return
 
-    status_msg = await message.reply_text(f"🏮 **Processing {len(files)} files...**\n`Sorting by Season → Quality → Episode` ⚡")
+    await message.reply_text(
+        f"📊 **Collected {len(files)} files.**\nSelect a font style for the captions before I deliver them:",
+        reply_markup=get_font_markup("seq_sort")
+    )
+
+@Client.on_callback_query(filters.regex(r"^font:seq_sort:"))
+async def sequence_sort_callback(client: Client, callback: CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    font = callback.data.split(":")[2]
+
+    files = await db.get_sequence_files(user_id)
+    if not files:
+        return await callback.message.edit_text("⚠️ Collection data lost. Please start over.")
+
+    await callback.message.edit_text(f"🚀 **Applying font `{font}` and sorting...**")
 
     # Sort files: Season -> Quality -> Episode
     try:
         sorted_list = sort_files(files)
     except Exception as e:
         logger.error(f"Sorting error: {e}")
-        return await status_msg.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
+        return await callback.message.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
 
-    await status_msg.edit_text(f"✨ **Sorting Complete!**\n`Now delivering {len(sorted_list)} files back to your archive...` 📦")
+    await callback.message.edit_text(f"📦 **Delivering {len(sorted_list)} files with stylized captions...**")
 
     count = 0
     for file_info in sorted_list:
         try:
-            await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=message.chat.id,
-                message_id=file_info["message_id"]
-            )
+            # Re-fetch the message to ensure we have current entities
+            msg = await client.get_messages(callback.message.chat.id, file_info["message_id"])
+
+            caption = msg.caption or ""
+            entities = msg.caption_entities
+
+            if caption:
+                # Render to HTML and then stylize
+                html_caption = render_message_to_html(caption, entities)
+                new_caption = stylize_text(html_caption, font, is_button=False)
+
+                # Send the media with the NEW stylized caption
+                # Preserve media caption position (above/below)
+                invert = getattr(msg, "invert_media", False)
+                if msg.video:
+                    await client.send_video(callback.message.chat.id, msg.video.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
+                elif msg.document:
+                    await client.send_document(callback.message.chat.id, msg.document.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
+                elif msg.audio:
+                    await client.send_audio(callback.message.chat.id, msg.audio.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
+                elif msg.animation:
+                    await client.send_animation(callback.message.chat.id, msg.animation.file_id, caption=new_caption, parse_mode=enums.ParseMode.HTML, invert_media=invert)
+            else:
+                # No caption, just copy
+                await client.copy_message(callback.message.chat.id, callback.message.chat.id, file_info["message_id"])
+
             count += 1
-            # Simple delay to avoid flood
             await asyncio.sleep(0.3)
         except errors.FloodWait as e:
             await asyncio.sleep(e.value + 1)
-            # Retry after flood
-            await client.copy_message(chat_id=message.chat.id, from_chat_id=message.chat.id, message_id=file_info["message_id"])
+            # Simple retry
+            await client.copy_message(callback.message.chat.id, callback.message.chat.id, file_info["message_id"])
             count += 1
         except Exception as e:
             logger.warning(f"Failed to send file {file_info.get('message_id')}: {e}")
@@ -127,9 +165,9 @@ async def sort_command(client, message):
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
 
-    await message.reply_text(
+    await callback.message.reply_text(
         f"🏁 **Sequencing Finished!**\n\n"
         f"✅ **Total Files Organized:** `{count}`\n"
-        f"📁 **Status:** `Success` 🧬\n\n"
-        f"**Your media archive is now perfectly ordered.**"
+        f"📁 **Font Applied:** `{font}`\n"
+        f"📁 **Status:** `Success` 🧬"
     )
