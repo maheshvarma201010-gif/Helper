@@ -115,7 +115,14 @@ async def start_replacement(client, message, user_id):
                             if msg.text:
                                 await worker.edit_message_text(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
                             else:
-                                await worker.edit_message_caption(chat_id, msg.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                                # Preserve media caption position (above/below)
+                                invert = getattr(msg, "invert_media", False)
+                                await worker.edit_message_caption(
+                                    chat_id, msg.id, new_html,
+                                    parse_mode=enums.ParseMode.HTML,
+                                    reply_markup=new_reply_markup,
+                                    invert_media=invert
+                                )
                             count += 1
                             await asyncio.sleep(0.5)
                             break

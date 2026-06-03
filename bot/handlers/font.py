@@ -93,17 +93,28 @@ async def apply_font_task(client, status_msg, chat_id, font, first_id=0, last_id
     worker = client
     count = 0
     processed = 0
-    total = (last_id - first_id + 1) if (first_id > 0 and last_id > 0) else 200
+
+    # Accurate total for progress
+    if first_id > 0 and last_id > 0:
+        total = last_id - first_id + 1
+        # Start message
+        await status_msg.edit_text(f"🚀 **Starting range conversion...**\nRange: `{first_id}-{last_id}`\nFont: `{font}`")
+    else:
+        total = 200
+        await status_msg.edit_text(f"🚀 **Starting history conversion...**\nLimit: `200` messages\nFont: `{font}`")
 
     try:
         if first_id > 0 and last_id > 0:
-            # Iterate through range
+            # Iterate through range in batches of 100
             for i in range(first_id, last_id + 1, 100):
-                batch_ids = list(range(i, min(i + 100, last_id + 1)))
+                batch_limit = min(i + 100, last_id + 1)
+                batch_ids = list(range(i, batch_limit))
+
                 try:
                     messages = await worker.get_messages(chat_id, batch_ids)
                 except Exception as e:
-                    logger.error(f"Error fetching batch {i}-{i+100}: {e}")
+                    logger.error(f"Error fetching batch {i}-{batch_limit}: {e}")
+                    processed += len(batch_ids)
                     continue
 
                 if not isinstance(messages, list): messages = [messages]
@@ -111,13 +122,20 @@ async def apply_font_task(client, status_msg, chat_id, font, first_id=0, last_id
                 for msg in messages:
                     processed += 1
                     if not msg or msg.empty: continue
+
+                    # Target both text and captions (files)
                     if await process_msg_font(worker, chat_id, msg, font):
                         count += 1
-                        await asyncio.sleep(0.1) # Reduced sleep for performance
+                        await asyncio.sleep(0.05) # Optimized sleep
 
-                    if processed % 50 == 0:
+                    if processed % 50 == 0 or processed == total:
                         try:
-                            await status_msg.edit_text(f"⏳ Font conversion in progress...\n\nProcessed: `{processed}/{total}`\nModified: `{count}`")
+                            await status_msg.edit_text(
+                                f"⏳ **Font conversion in progress...**\n\n"
+                                f"✅ Processed: `{processed}/{total}`\n"
+                                f"✨ Modified: `{count}`\n"
+                                f"🎯 Font: `{font}`"
+                            )
                         except: pass
         else:
             # Last 200 messages

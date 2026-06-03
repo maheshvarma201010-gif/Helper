@@ -41,7 +41,14 @@ async def auto_font_handler(client, message):
             if message.text:
                 await client.edit_message_text(channel_id, message.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
             else:
-                await client.edit_message_caption(channel_id, message.id, new_html, parse_mode=enums.ParseMode.HTML, reply_markup=new_reply_markup)
+                # Preserve media caption position (above/below)
+                invert = getattr(message, "invert_media", False)
+                await client.edit_message_caption(
+                    channel_id, message.id, new_html,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_markup=new_reply_markup,
+                    invert_media=invert
+                )
 
     except Exception as e:
         logger.error(f"Auto font error in channel {channel_id}: {e}")
