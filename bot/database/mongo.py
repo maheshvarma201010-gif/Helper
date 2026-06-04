@@ -152,11 +152,14 @@ class Database:
         return await self.tedit_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
 
     # TEdit Monitoring
-    async def set_tedit_monitoring(self, user_id, channel_id, status=True):
+    async def set_tedit_monitoring(self, user_id, channel_id, status=True, settings=None):
         if status:
+            update_data = {"active": True}
+            if settings:
+                update_data["settings"] = settings
             await self.tedit_monitoring.update_one(
                 {"user_id": user_id, "channel_id": channel_id},
-                {"$set": {"active": True}},
+                {"$set": update_data},
                 upsert=True
             )
         else:

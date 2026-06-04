@@ -133,9 +133,19 @@ async def tedit_command_router(client, message):
             current = await db.get_user_monitoring(user_id)
             is_monitored = any(m["channel_id"] == chat.id for m in current)
 
-            await db.set_tedit_monitoring(user_id, chat.id, not is_monitored)
-            status_text = "Enabled" if not is_monitored else "Disabled"
-            return await message.reply_text(f"✅ Monitoring {status_text} for `{chat.title}` ({chat.id})")
+            if is_monitored:
+                await db.set_tedit_monitoring(user_id, chat.id, status=False)
+                return await message.reply_text(f"❌ Monitoring Disabled for `{chat.title}` ({chat.id})")
+            else:
+                await db.set_tedit_monitoring(user_id, chat.id, status=True)
+                return await message.reply_text(
+                    f"✅ Monitoring Enabled for `{chat.title}` ({chat.id})\n\n"
+                    "Do you want to use Global settings or configure Custom settings for this channel?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🌍 Global Settings", callback_data="tedit_menu:monitor")],
+                        [InlineKeyboardButton("⚙️ Custom Settings", callback_data=f"tedit_ch_menu:{chat.id}")]
+                    ])
+                )
         except Exception as e:
             return await message.reply_text(f"❌ Error: {e}")
 
@@ -234,12 +244,22 @@ async def start_setup_wizard(client, message):
     ]
     await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-async def show_settings_menu(client, message_or_query):
+async def show_settings_menu(client, message_or_query, channel_id=None):
     user_id = message_or_query.from_user.id
-    settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS
+
+    if channel_id:
+        # Fetch channel-specific settings
+        monitoring = await db.tedit_monitoring.find_one({"user_id": user_id, "channel_id": channel_id})
+        settings = (monitoring or {}).get("settings") or await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS
+        title_prefix = f"📺 **Channel Settings: {channel_id}**"
+        cb_prefix = f"tedit_ch:{channel_id}:"
+    else:
+        settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS
+        title_prefix = "⚙️ **TEdit Global Settings**"
+        cb_prefix = "tedit_menu:"
 
     text = (
-        "⚙️ **TEdit Watermark Settings**\n\n"
+        f"{title_prefix}\n\n"
         f"• **Type:** `{settings.get('type')}`\n"
         f"• **Value:** `{settings.get('text') or 'Media File'}`\n"
         f"• **Position:** `{settings.get('position')}`\n"
@@ -250,16 +270,22 @@ async def show_settings_menu(client, message_or_query):
     )
 
     buttons = [
-        [InlineKeyboardButton("Type", callback_data="tedit_menu:type"),
-         InlineKeyboardButton("Value", callback_data="tedit_menu:value")],
-        [InlineKeyboardButton("Position", callback_data="tedit_menu:position"),
-         InlineKeyboardButton("Opacity", callback_data="tedit_menu:opacity")],
-        [InlineKeyboardButton("Size", callback_data="tedit_menu:size"),
-         InlineKeyboardButton("Margin", callback_data="tedit_menu:margin")],
-        [InlineKeyboardButton("Rotation", callback_data="tedit_menu:rotation")],
-        [InlineKeyboardButton("🖼 Preview", callback_data="tedit_preview"),
-         InlineKeyboardButton("✅ Save & Close", callback_data="tedit_close")]
+        [InlineKeyboardButton("Type", callback_data=f"{cb_prefix}type"),
+         InlineKeyboardButton("Value", callback_data=f"{cb_prefix}value")],
+        [InlineKeyboardButton("Position", callback_data=f"{cb_prefix}position"),
+         InlineKeyboardButton("Opacity", callback_data=f"{cb_prefix}opacity")],
+        [InlineKeyboardButton("Size", callback_data=f"{cb_prefix}size"),
+         InlineKeyboardButton("Margin", callback_data=f"{cb_prefix}margin")],
+        [InlineKeyboardButton("Rotation", callback_data=f"{cb_prefix}rotation")],
     ]
+
+    if not channel_id:
+        buttons.append([InlineKeyboardButton("📺 Monitor New Channel", callback_data="tedit_menu:monitor")])
+        buttons.append([InlineKeyboardButton("🖼 Preview", callback_data="tedit_preview"),
+                        InlineKeyboardButton("✅ Save & Close", callback_data="tedit_close")])
+    else:
+        buttons.append([InlineKeyboardButton("🖼 Preview", callback_data=f"tedit_preview:{channel_id}"),
+                        InlineKeyboardButton("🔙 Back to Monitoring", callback_data="tedit_menu:monitor")])
 
     if isinstance(message_or_query, CallbackQuery):
         await message_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -270,6 +296,29 @@ async def show_settings_menu(client, message_or_query):
 async def handle_menu_callbacks(client, callback_query):
     action = callback_query.matches[0].group(1)
     user_id = callback_query.from_user.id
+
+    if action == "monitor":
+        # Show list of monitored channels and an option to add new
+        monitors = await db.get_user_monitoring(user_id)
+        text = "📺 **Monitored Channels**\n\nSelect a channel to configure custom settings or stop monitoring:"
+        buttons = []
+        for m in monitors:
+            try:
+                chat = await client.get_chat(m["channel_id"])
+                title = chat.title
+            except: title = f"Channel {m['channel_id']}"
+            buttons.append([InlineKeyboardButton(f"⚙️ {title}", callback_data=f"tedit_ch_menu:{m['channel_id']}")])
+
+        buttons.append([InlineKeyboardButton("➕ Add New Channel", callback_data="tedit_menu:add_channel")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="tedit_main")])
+        await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if action == "add_channel":
+        await db.update_user_state(user_id, "tedit_awaiting_channel_id")
+        await callback_query.message.reply_text("Please send the Channel ID (e.g., `-100...`) of the channel you want to monitor.")
+        await callback_query.answer()
+        return
 
     if action == "type":
         buttons = [
@@ -342,10 +391,93 @@ async def handle_main_menu(client, callback_query):
 async def handle_close(client, callback_query):
     await callback_query.message.delete()
 
-@Client.on_callback_query(filters.regex(r"^tedit_preview$"))
-async def handle_preview(client, callback_query):
+@Client.on_callback_query(filters.regex(r"^tedit_ch_menu:(.+)"))
+async def handle_channel_menu(client, callback_query):
+    channel_id = int(callback_query.matches[0].group(1))
+    await show_settings_menu(client, callback_query, channel_id=channel_id)
+
+@Client.on_callback_query(filters.regex(r"^tedit_ch:(-?\d+):(.+)"))
+async def handle_channel_settings_callbacks(client, callback_query):
+    channel_id = int(callback_query.matches[0].group(1))
+    action = callback_query.matches[0].group(2)
     user_id = callback_query.from_user.id
-    settings = await db.get_tedit_settings(user_id)
+
+    if action == "type":
+        buttons = [
+            [InlineKeyboardButton("Logo / Image", callback_data=f"tedit_ch_set:{channel_id}:type:logo")],
+            [InlineKeyboardButton("Text Watermark", callback_data=f"tedit_ch_set:{channel_id}:type:text")],
+            [InlineKeyboardButton("Sticker", callback_data=f"tedit_ch_set:{channel_id}:type:sticker")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"tedit_ch_menu:{channel_id}")]
+        ]
+        await callback_query.edit_message_text(f"Choose watermark type for channel {channel_id}:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif action == "position":
+        buttons = [
+            [InlineKeyboardButton("Top Left", callback_data=f"tedit_ch_set:{channel_id}:pos:top_left"),
+             InlineKeyboardButton("Top Center", callback_data=f"tedit_ch_set:{channel_id}:pos:top_center"),
+             InlineKeyboardButton("Top Right", callback_data=f"tedit_ch_set:{channel_id}:pos:top_right")],
+            [InlineKeyboardButton("Center Left", callback_data=f"tedit_ch_set:{channel_id}:pos:center_left"),
+             InlineKeyboardButton("Center", callback_data=f"tedit_ch_set:{channel_id}:pos:center"),
+             InlineKeyboardButton("Center Right", callback_data=f"tedit_ch_set:{channel_id}:pos:center_right")],
+            [InlineKeyboardButton("Bottom Left", callback_data=f"tedit_ch_set:{channel_id}:pos:bottom_left"),
+             InlineKeyboardButton("Bottom Center", callback_data=f"tedit_ch_set:{channel_id}:pos:bottom_center"),
+             InlineKeyboardButton("Bottom Right", callback_data=f"tedit_ch_set:{channel_id}:pos:bottom_right")],
+            [InlineKeyboardButton("Custom X/Y", callback_data=f"tedit_ch:{channel_id}:custom_pos")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"tedit_ch_menu:{channel_id}")]
+        ]
+        await callback_query.edit_message_text("Choose position:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif action in ["opacity", "size", "margin", "rotation", "value", "custom_pos"]:
+        await db.update_user_state(user_id, f"tedit_ch_awaiting_{action}_{channel_id}")
+        msg = {
+            "opacity": f"Send opacity percentage (0-100) for channel {channel_id}:",
+            "size": "Send watermark size percentage (1-100):",
+            "margin": "Send margin/padding in pixels:",
+            "rotation": "Send rotation angle (0-359):",
+            "value": "Send the text for watermark, or send the logo image/sticker:",
+            "custom_pos": "Send custom X and Y percentages (e.g., `50 50` for center):"
+        }[action]
+        await callback_query.message.reply_text(msg)
+        await callback_query.answer()
+
+@Client.on_callback_query(filters.regex(r"^tedit_ch_set:(-?\d+):(.+):(.+)"))
+async def handle_channel_set_callbacks(client, callback_query):
+    channel_id = int(callback_query.matches[0].group(1))
+    param = callback_query.matches[0].group(2)
+    value = callback_query.matches[0].group(3)
+    user_id = callback_query.from_user.id
+
+    monitoring = await db.tedit_monitoring.find_one({"user_id": user_id, "channel_id": channel_id})
+    settings = (monitoring or {}).get("settings") or (await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS).copy()
+
+    if param == "type":
+        settings["type"] = value
+        await db.set_tedit_monitoring(user_id, channel_id, status=True, settings=settings)
+        await callback_query.answer(f"Type set to {value}")
+        if value == "text":
+            await db.update_user_state(user_id, f"tedit_ch_awaiting_value_{channel_id}")
+            await callback_query.message.reply_text("Now send the text for your watermark:")
+        else:
+            await db.update_user_state(user_id, f"tedit_ch_awaiting_value_{channel_id}")
+            await callback_query.message.reply_text(f"Now send the {value} file:")
+
+    elif param == "pos":
+        settings["position"] = value
+        await db.set_tedit_monitoring(user_id, channel_id, status=True, settings=settings)
+        await callback_query.answer(f"Position set to {value}")
+        await show_settings_menu(client, callback_query, channel_id=channel_id)
+
+@Client.on_callback_query(filters.regex(r"^tedit_preview(?::(-?\d+))?$"))
+async def handle_preview(client, callback_query):
+    channel_id_str = callback_query.matches[0].group(1)
+    user_id = callback_query.from_user.id
+
+    if channel_id_str:
+        channel_id = int(channel_id_str)
+        monitoring = await db.tedit_monitoring.find_one({"user_id": user_id, "channel_id": channel_id})
+        settings = (monitoring or {}).get("settings") or await db.get_tedit_settings(user_id)
+    else:
+        settings = await db.get_tedit_settings(user_id)
 
     if not settings:
         return await callback_query.answer("No settings found!")
@@ -381,12 +513,45 @@ async def handle_settings_input(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
-    if not state or not state.startswith("tedit_awaiting_"):
+    if not state or (not state.startswith("tedit_awaiting_") and not state.startswith("tedit_ch_awaiting_")):
         message.continue_propagation()
         return
 
-    settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS.copy()
-    action = state.replace("tedit_awaiting_", "")
+    if state == "tedit_awaiting_channel_id":
+        try:
+            chat_id = int(message.text)
+            chat = await resolve_chat(client, chat_id)
+
+            # Check permissions
+            member = await chat.get_member(client.me.id)
+            if not member.privileges or not member.privileges.can_edit_messages:
+                return await message.reply_text("❌ I need 'Edit Messages' permission in that channel.")
+
+            await db.set_tedit_monitoring(user_id, chat.id, status=True)
+            await db.update_user_state(user_id, None)
+            await message.reply_text(f"✅ Monitoring Enabled for `{chat.title}` ({chat.id})\n\nDo you want to use Global settings or configure Custom settings for this channel?",
+                                     reply_markup=InlineKeyboardMarkup([
+                                         [InlineKeyboardButton("🌍 Global Settings", callback_data="tedit_menu:monitor")],
+                                         [InlineKeyboardButton("⚙️ Custom Settings", callback_data=f"tedit_ch_menu:{chat.id}")]
+                                     ]))
+            return
+        except Exception as e:
+            return await message.reply_text(f"❌ Error: {e}")
+
+    # Handle global and channel-specific settings
+    is_channel = state.startswith("tedit_ch_awaiting_")
+    channel_id = None
+    if is_channel:
+        # State format: tedit_ch_awaiting_ACTION_CHANNELID
+        parts = state.replace("tedit_ch_awaiting_", "").split("_")
+        action = parts[0]
+        channel_id = int(parts[1]) if len(parts) > 1 else None
+
+        monitoring = await db.tedit_monitoring.find_one({"user_id": user_id, "channel_id": channel_id})
+        settings = (monitoring or {}).get("settings") or (await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS).copy()
+    else:
+        action = state.replace("tedit_awaiting_", "")
+        settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS.copy()
 
     if action == "value":
         if settings["type"] == "text":
@@ -434,10 +599,14 @@ async def handle_settings_input(client, message):
             settings["position"] = "custom"
         except: return await message.reply_text("Invalid format. Send two numbers, e.g., `50 50`.")
 
-    await db.set_tedit_settings(user_id, settings)
+    if is_channel and channel_id:
+        await db.set_tedit_monitoring(user_id, channel_id, status=True, settings=settings)
+    else:
+        await db.set_tedit_settings(user_id, settings)
+
     await db.update_user_state(user_id, None)
     await message.reply_text("✅ Setting updated!")
-    await show_settings_menu(client, message)
+    await show_settings_menu(client, message, channel_id=channel_id)
 
 @Client.on_message(filters.channel & ~filters.service, group=1)
 async def tedit_monitor_handler(client, message):
@@ -450,7 +619,8 @@ async def tedit_monitor_handler(client, message):
     # We process for each user who monitors this channel
     for monitor in monitors:
         user_id = monitor["user_id"]
-        settings = await db.get_tedit_settings(user_id)
+        # Prioritize channel-specific settings
+        settings = monitor.get("settings") or await db.get_tedit_settings(user_id)
         if not settings: continue
 
         # Add to queue as a high-priority "single" task
@@ -462,6 +632,7 @@ async def tedit_monitor_handler(client, message):
             "message_id": message.id,
             "status": "queued",
             "type": "monitor",
+            "settings": settings, # Store settings at time of queuing for monitor jobs
             "timestamp": time.time()
         }
         await db.add_tedit_job(job_data)
@@ -537,7 +708,8 @@ async def process_single_job(client, job):
     user_id = job["user_id"]
     msg_id = job["message_id"]
 
-    settings = await db.get_tedit_settings(user_id)
+    # Use stored settings if available (for monitor jobs), else fetch
+    settings = job.get("settings") or await db.get_tedit_settings(user_id)
     media_path = None
     if settings.get("type") in ["logo", "sticker"]:
         media_file_id = settings.get("media_file_id")
