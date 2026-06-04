@@ -19,6 +19,9 @@ class Database:
         self.search_cache = self.db["search_cache"]
         self.batches = self.db["batches"]
         self.fonts = self.db["fonts"]
+        self.tedit_settings = self.db["tedit_settings"]
+        self.tedit_jobs = self.db["tedit_jobs"]
+        self.tedit_monitoring = self.db["tedit_monitoring"]
 
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
@@ -124,5 +127,45 @@ class Database:
 
     async def delete_channel_font(self, channel_id):
         await self.fonts.delete_one({"channel_id": channel_id})
+
+    # TEdit Settings
+    async def set_tedit_settings(self, user_id, settings):
+        await self.tedit_settings.update_one({"user_id": user_id}, {"$set": settings}, upsert=True)
+
+    async def get_tedit_settings(self, user_id):
+        return await self.tedit_settings.find_one({"user_id": user_id})
+
+    # TEdit Jobs
+    async def add_tedit_job(self, job_data):
+        await self.tedit_jobs.insert_one(job_data)
+
+    async def update_tedit_job(self, job_id, update_data):
+        await self.tedit_jobs.update_one({"job_id": job_id}, {"$set": update_data})
+
+    async def get_tedit_job(self, job_id):
+        return await self.tedit_jobs.find_one({"job_id": job_id})
+
+    async def get_active_tedit_job(self, user_id):
+        return await self.tedit_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued"]}})
+
+    async def get_all_active_tedit_jobs(self):
+        return await self.tedit_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
+
+    # TEdit Monitoring
+    async def set_tedit_monitoring(self, user_id, channel_id, status=True):
+        if status:
+            await self.tedit_monitoring.update_one(
+                {"user_id": user_id, "channel_id": channel_id},
+                {"$set": {"active": True}},
+                upsert=True
+            )
+        else:
+            await self.tedit_monitoring.delete_one({"user_id": user_id, "channel_id": channel_id})
+
+    async def get_tedit_monitoring(self, channel_id):
+        return await self.tedit_monitoring.find({"channel_id": channel_id, "active": True}).to_list(length=None)
+
+    async def get_user_monitoring(self, user_id):
+        return await self.tedit_monitoring.find({"user_id": user_id, "active": True}).to_list(length=None)
 
 db = Database()

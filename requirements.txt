@@ -9,3 +9,4 @@ jinja2
 cloudscraper
 requests
 beautifulsoup4
+Pillow

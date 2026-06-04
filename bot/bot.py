@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import json
 import aiohttp_jinja2
 import jinja2
 from pyrogram import Client, errors
@@ -16,7 +17,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def health_check(request):
-    return web.Response(text="Bot is running!")
+    active_jobs = await db.get_all_active_tedit_jobs()
+    status = {
+        "status": "running",
+        "active_tedit_jobs": len(active_jobs),
+        "jobs": [
+            {
+                "job_id": j["job_id"],
+                "status": j["status"],
+                "processed": j.get("total_processed", 0)
+            } for j in active_jobs
+        ]
+    }
+    return web.Response(text=json.dumps(status), content_type="application/json")
 
 async def home_handler(request):
     page = int(request.query.get('page', 1))
@@ -124,6 +137,10 @@ class Bot(Client):
         site = web.TCPSite(runner, "0.0.0.0", Config.PORT)
         await site.start()
         logger.info(f"Health check server started on port {Config.PORT}")
+
+        # Start TEdit Worker
+        from bot.handlers.tedit import init_worker
+        await init_worker(self)
 
     async def cache_peers(self):
         """
