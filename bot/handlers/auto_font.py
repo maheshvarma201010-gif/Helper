@@ -6,7 +6,7 @@ from bot.utils.replacer import render_message_to_html, replace_in_buttons
 
 logger = logging.getLogger(__name__)
 
-@Client.on_message(filters.channel & ~filters.service)
+@Client.on_message(filters.channel & ~filters.service, group=-1)
 async def auto_font_handler(client, message):
     """
     Automatically stylizes new posts in channels that have a default font set.

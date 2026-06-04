@@ -16,7 +16,7 @@ async def replace_command(client, message):
     await db.update_user_state(user_id, "awaiting_first_link")
     await message.reply_text("Send FIRST message link.")
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "b"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "b", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]))
 async def handle_replace_workflow(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)

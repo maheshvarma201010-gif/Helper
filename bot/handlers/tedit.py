@@ -371,7 +371,7 @@ async def handle_preview(client, callback_query):
     if os.path.exists(dummy_path): os.remove(dummy_path)
     if media_path and os.path.exists(media_path): os.remove(media_path)
 
-@Client.on_message(filters.private & filters.create(lambda _, __, m: m.text or m.photo or m.sticker or m.document) & ~filters.command(["tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings"]))
+@Client.on_message(filters.private & filters.create(lambda _, __, m: m.text or m.photo or m.sticker or m.document) & ~filters.command(["tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview", "start", "sequence", "sort", "replace", "replace_domain", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "redirect", "b"]))
 async def handle_settings_input(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -433,7 +433,7 @@ async def handle_settings_input(client, message):
     await message.reply_text("✅ Setting updated!")
     await show_settings_menu(client, message)
 
-@Client.on_message(filters.channel)
+@Client.on_message(filters.channel, group=1)
 async def tedit_monitor_handler(client, message):
     chat_id = message.chat.id
     monitors = await db.get_tedit_monitoring(chat_id)

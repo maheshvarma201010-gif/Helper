@@ -26,7 +26,7 @@ async def cancel_replace_command(client, message):
     await db.update_user_state(user_id, None)
     await message.reply_text("🛑 **Domain replacement task cancelled.**")
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "cancel_replace", "b"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "cancel_replace", "b", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]))
 async def handle_domain_workflow(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
