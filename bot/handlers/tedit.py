@@ -4,13 +4,26 @@ import time
 import logging
 import uuid
 from pyrogram import Client, filters, enums, errors
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
 from bot.utils.watermark import apply_watermark
 from bot.utils.replacer import render_message_to_html
 
 logger = logging.getLogger(__name__)
+
+# Default settings
+DEFAULT_SETTINGS = {
+    "type": "text",
+    "text": "@your_username",
+    "position": "bottom_right",
+    "opacity": 0.8,
+    "size": 15,
+    "margin": 20,
+    "rotation": 0,
+    "custom_x": 0,
+    "custom_y": 0
+}
 
 # Global task queue to handle concurrency
 tedit_queue = asyncio.Queue()
@@ -64,8 +77,7 @@ async def tedit_control_commands(client, message):
         await message.reply_text("✅ Job paused.")
     elif cmd == "resume":
         await db.update_tedit_job(job['job_id'], {"status": "running"})
-        # We don't need to re-add to queue if it was already in queue or paused
-        # but the worker checks status continuously.
+        await tedit_queue.put(job['job_id'])
         await message.reply_text("✅ Job resumed.")
 
 @Client.on_callback_query(filters.regex(r"^tedit_job:(.+):(.+)"))
@@ -81,25 +93,33 @@ async def handle_job_callbacks(client, callback_query):
         await callback_query.answer("Job paused.")
     elif action == "resume":
         await db.update_tedit_job(job_id, {"status": "running"})
+        await tedit_queue.put(job_id)
         await callback_query.answer("Job resumed.")
 
     # Refresh status message
     await tedit_status_command(client, callback_query.message)
 
 @Client.on_message(filters.command("tedit") & filters.private)
-async def tedit_range_command(client, message):
-    if len(message.command) < 2:
-        return # Handled by tedit_setup.py
-
+async def tedit_command_router(client, message):
     user_id = message.from_user.id
     settings = await db.get_tedit_settings(user_id)
+
+    # If no arguments, show setup or settings menu
+    if len(message.command) == 1:
+        if not settings:
+            await start_setup_wizard(client, message)
+        else:
+            await show_settings_menu(client, message)
+        return
+
+    # If arguments, handle range or monitoring mode
     if not settings:
-        return await message.reply_text("Please setup your watermark first using /tedit")
+        return await message.reply_text("Please complete the setup first by running /tedit without arguments.")
 
     args = message.command[1:]
 
     # Check if it's a channel ID for monitoring
-    if len(args) == 1 and (args[0].startswith("-100") or args[0].isdigit()):
+    if len(args) == 1 and (args[0].startswith("-100") or args[0].lstrip("-").isdigit()):
         try:
             chat_id = int(args[0])
             chat = await resolve_chat(client, chat_id)
@@ -156,6 +176,262 @@ async def tedit_range_command(client, message):
         await db.add_tedit_job(job_data)
         await tedit_queue.put(job_id)
         await message.reply_text(f"✅ TEdit Job Queued! (ID: `{job_id}`)\nUse /tedit_status to track progress.")
+
+@Client.on_message(filters.command("tedit_settings") & filters.private)
+async def tedit_settings_command(client, message):
+    await show_settings_menu(client, message)
+
+@Client.on_message(filters.command("tedit_preview") & filters.private)
+async def tedit_preview_command(client, message):
+    user_id = message.from_user.id
+    settings = await db.get_tedit_settings(user_id)
+
+    if not settings:
+        return await message.reply_text("No settings found! Please setup first using /tedit")
+
+    # Logic same as handle_preview
+    status_msg = await message.reply_text("Generating preview...")
+
+    # Create a dummy dark image for preview
+    from PIL import Image
+    dummy = Image.new("RGB", (1280, 720), (30, 30, 30))
+    dummy_path = f"preview_cmd_{user_id}.jpg"
+    dummy.save(dummy_path)
+
+    # Check if we need a media file
+    media_path = None
+    if settings.get("type") in ["logo", "sticker"]:
+        media_file_id = settings.get("media_file_id")
+        if media_file_id:
+            try:
+                media_path = await client.download_media(media_file_id)
+            except Exception as e:
+                logger.warning(f"Failed to download watermark media for preview: {e}")
+
+    processed = apply_watermark(dummy_path, settings, media_path)
+
+    if processed:
+        await message.reply_photo(processed, caption="🖼 **Watermark Preview**")
+        await status_msg.delete()
+    else:
+        await status_msg.edit_text("❌ Failed to generate preview.")
+
+    # Cleanup
+    if os.path.exists(dummy_path): os.remove(dummy_path)
+    if media_path and os.path.exists(media_path): os.remove(media_path)
+
+async def start_setup_wizard(client, message):
+    text = "Welcome to the **TEdit Setup Wizard**! 🎨\n\nPlease choose your watermark type:"
+    buttons = [
+        [InlineKeyboardButton("Logo / Image", callback_data="tedit_set:type:logo")],
+        [InlineKeyboardButton("Text Watermark", callback_data="tedit_set:type:text")],
+        [InlineKeyboardButton("Sticker", callback_data="tedit_set:type:sticker")]
+    ]
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+async def show_settings_menu(client, message_or_query):
+    user_id = message_or_query.from_user.id
+    settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS
+
+    text = (
+        "⚙️ **TEdit Watermark Settings**\n\n"
+        f"• **Type:** `{settings.get('type')}`\n"
+        f"• **Value:** `{settings.get('text') or 'Media File'}`\n"
+        f"• **Position:** `{settings.get('position')}`\n"
+        f"• **Opacity:** `{int(settings.get('opacity', 1.0) * 100)}%`\n"
+        f"• **Size:** `{settings.get('size')}%`\n"
+        f"• **Margin:** `{settings.get('margin')}px`\n"
+        f"• **Rotation:** `{settings.get('rotation')}°`"
+    )
+
+    buttons = [
+        [InlineKeyboardButton("Type", callback_data="tedit_menu:type"),
+         InlineKeyboardButton("Value", callback_data="tedit_menu:value")],
+        [InlineKeyboardButton("Position", callback_data="tedit_menu:position"),
+         InlineKeyboardButton("Opacity", callback_data="tedit_menu:opacity")],
+        [InlineKeyboardButton("Size", callback_data="tedit_menu:size"),
+         InlineKeyboardButton("Margin", callback_data="tedit_menu:margin")],
+        [InlineKeyboardButton("Rotation", callback_data="tedit_menu:rotation")],
+        [InlineKeyboardButton("🖼 Preview", callback_data="tedit_preview"),
+         InlineKeyboardButton("✅ Save & Close", callback_data="tedit_close")]
+    ]
+
+    if isinstance(message_or_query, CallbackQuery):
+        await message_or_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await message_or_query.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Client.on_callback_query(filters.regex(r"^tedit_menu:(.+)"))
+async def handle_menu_callbacks(client, callback_query):
+    action = callback_query.matches[0].group(1)
+    user_id = callback_query.from_user.id
+
+    if action == "type":
+        buttons = [
+            [InlineKeyboardButton("Logo / Image", callback_data="tedit_set:type:logo")],
+            [InlineKeyboardButton("Text Watermark", callback_data="tedit_set:type:text")],
+            [InlineKeyboardButton("Sticker", callback_data="tedit_set:type:sticker")],
+            [InlineKeyboardButton("🔙 Back", callback_data="tedit_main")]
+        ]
+        await callback_query.edit_message_text("Choose watermark type:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif action == "position":
+        buttons = [
+            [InlineKeyboardButton("Top Left", callback_data="tedit_set:pos:top_left"),
+             InlineKeyboardButton("Top Center", callback_data="tedit_set:pos:top_center"),
+             InlineKeyboardButton("Top Right", callback_data="tedit_set:pos:top_right")],
+            [InlineKeyboardButton("Center Left", callback_data="tedit_set:pos:center_left"),
+             InlineKeyboardButton("Center", callback_data="tedit_set:pos:center"),
+             InlineKeyboardButton("Center Right", callback_data="tedit_set:pos:center_right")],
+            [InlineKeyboardButton("Bottom Left", callback_data="tedit_set:pos:bottom_left"),
+             InlineKeyboardButton("Bottom Center", callback_data="tedit_set:pos:bottom_center"),
+             InlineKeyboardButton("Bottom Right", callback_data="tedit_set:pos:bottom_right")],
+            [InlineKeyboardButton("Custom X/Y", callback_data="tedit_menu:custom_pos")],
+            [InlineKeyboardButton("🔙 Back", callback_data="tedit_main")]
+        ]
+        await callback_query.edit_message_text("Choose position:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif action in ["opacity", "size", "margin", "rotation", "value", "custom_pos"]:
+        await db.update_user_state(user_id, f"tedit_awaiting_{action}")
+        msg = {
+            "opacity": "Send opacity percentage (0-100):",
+            "size": "Send watermark size percentage (1-100):",
+            "margin": "Send margin/padding in pixels:",
+            "rotation": "Send rotation angle (0-359):",
+            "value": "Send the text for watermark, or send the logo image/sticker:",
+            "custom_pos": "Send custom X and Y percentages (e.g., `50 50` for center):"
+        }[action]
+        await callback_query.message.reply_text(msg)
+        await callback_query.answer()
+
+@Client.on_callback_query(filters.regex(r"^tedit_set:(.+):(.+)"))
+async def handle_set_callbacks(client, callback_query):
+    param = callback_query.matches[0].group(1)
+    value = callback_query.matches[0].group(2)
+    user_id = callback_query.from_user.id
+
+    settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS.copy()
+
+    if param == "type":
+        settings["type"] = value
+        await db.set_tedit_settings(user_id, settings)
+        await callback_query.answer(f"Type set to {value}")
+        if value == "text":
+            await db.update_user_state(user_id, "tedit_awaiting_value")
+            await callback_query.message.reply_text("Now send the text for your watermark:")
+        else:
+            await db.update_user_state(user_id, "tedit_awaiting_value")
+            await callback_query.message.reply_text(f"Now send the {value} file:")
+
+    elif param == "pos":
+        settings["position"] = value
+        await db.set_tedit_settings(user_id, settings)
+        await callback_query.answer(f"Position set to {value}")
+        await show_settings_menu(client, callback_query)
+
+@Client.on_callback_query(filters.regex(r"^tedit_main$"))
+async def handle_main_menu(client, callback_query):
+    await show_settings_menu(client, callback_query)
+
+@Client.on_callback_query(filters.regex(r"^tedit_close$"))
+async def handle_close(client, callback_query):
+    await callback_query.message.delete()
+
+@Client.on_callback_query(filters.regex(r"^tedit_preview$"))
+async def handle_preview(client, callback_query):
+    user_id = callback_query.from_user.id
+    settings = await db.get_tedit_settings(user_id)
+
+    if not settings:
+        return await callback_query.answer("No settings found!")
+
+    await callback_query.answer("Generating preview...")
+
+    # Create a dummy dark image for preview
+    from PIL import Image
+    dummy = Image.new("RGB", (1280, 720), (30, 30, 30))
+    dummy_path = f"preview_{user_id}.jpg"
+    dummy.save(dummy_path)
+
+    # Check if we need a media file
+    media_path = None
+    if settings.get("type") in ["logo", "sticker"]:
+        media_file_id = settings.get("media_file_id")
+        if media_file_id:
+            media_path = await client.download_media(media_file_id)
+
+    processed = apply_watermark(dummy_path, settings, media_path)
+
+    if processed:
+        await callback_query.message.reply_photo(processed, caption="🖼 **Watermark Preview**")
+    else:
+        await callback_query.message.reply_text("❌ Failed to generate preview.")
+
+    # Cleanup
+    if os.path.exists(dummy_path): os.remove(dummy_path)
+    if media_path and os.path.exists(media_path): os.remove(media_path)
+
+@Client.on_message(filters.private & filters.create(lambda _, __, m: m.text or m.photo or m.sticker or m.document) & ~filters.command(["tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings"]))
+async def handle_settings_input(client, message):
+    user_id = message.from_user.id
+    state = await db.get_user_state(user_id)
+
+    if not state or not state.startswith("tedit_awaiting_"):
+        return
+
+    settings = await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS.copy()
+    action = state.replace("tedit_awaiting_", "")
+
+    if action == "value":
+        if settings["type"] == "text":
+            if not message.text:
+                return await message.reply_text("Please send text.")
+            settings["text"] = message.text
+        else:
+            media = message.photo or message.sticker or message.document
+            if not media:
+                return await message.reply_text(f"Please send a {settings['type']}.")
+            settings["media_file_id"] = media.file_id
+            settings["text"] = None # Clear text if media is set
+
+    elif action == "opacity":
+        try:
+            val = float(message.text) / 100.0
+            if 0 <= val <= 1.0:
+                settings["opacity"] = val
+            else: raise ValueError()
+        except: return await message.reply_text("Invalid value. Send a number between 0 and 100.")
+
+    elif action == "size":
+        try:
+            val = int(message.text)
+            if 1 <= val <= 100:
+                settings["size"] = val
+            else: raise ValueError()
+        except: return await message.reply_text("Invalid value. Send a number between 1 and 100.")
+
+    elif action == "margin":
+        try:
+            settings["margin"] = int(message.text)
+        except: return await message.reply_text("Invalid value. Send a number.")
+
+    elif action == "rotation":
+        try:
+            settings["rotation"] = int(message.text) % 360
+        except: return await message.reply_text("Invalid value. Send a number.")
+
+    elif action == "custom_pos":
+        try:
+            parts = message.text.split()
+            settings["custom_x"] = int(parts[0])
+            settings["custom_y"] = int(parts[1])
+            settings["position"] = "custom"
+        except: return await message.reply_text("Invalid format. Send two numbers, e.g., `50 50`.")
+
+    await db.set_tedit_settings(user_id, settings)
+    await db.update_user_state(user_id, None)
+    await message.reply_text("✅ Setting updated!")
+    await show_settings_menu(client, message)
 
 @Client.on_message(filters.channel)
 async def tedit_monitor_handler(client, message):
@@ -220,7 +496,9 @@ async def process_range_job(client, job):
             media_path = await client.download_media(media_file_id)
 
     try:
-        for msg_id in range(start_id, end_id + 1):
+        # Avoid re-processing the last message on resume
+        current_start = start_id if start_id == job.get("start_id") else start_id + 1
+        for msg_id in range(current_start, end_id + 1):
             # Check if job is still active
             job = await db.get_tedit_job(job_id)
             if not job or job["status"] != "running":
@@ -233,7 +511,7 @@ async def process_range_job(client, job):
                 if await process_message_watermark(client, msg, settings, media_path):
                     await db.update_tedit_job(job_id, {
                         "current_id": msg_id,
-                        "total_processed": job["total_processed"] + 1
+                        "total_processed": job.get("total_processed", 0) + 1
                     })
 
                 await asyncio.sleep(0.5) # Flood protection
@@ -300,10 +578,6 @@ async def process_message_watermark(client, msg, settings, watermark_media_path)
 
         if not processed_bytes: return False
 
-        # Determine if we can edit
-        # Note: Bot API allows editing media only in certain conditions,
-        # but Pyrogram edit_message_media usually works for channels if bot is admin.
-
         # Preserve metadata
         caption = render_message_to_html(msg.caption, msg.caption_entities) if msg.caption else None
         reply_markup = msg.reply_markup
@@ -315,33 +589,43 @@ async def process_message_watermark(client, msg, settings, watermark_media_path)
         with open(temp_out, "wb") as f:
             f.write(processed_bytes.getvalue())
 
-        try:
-            await client.edit_message_media(
-                chat_id=msg.chat.id,
-                message_id=msg.id,
-                media=InputMediaPhoto(temp_out, caption=caption, parse_mode=enums.ParseMode.HTML),
-                reply_markup=reply_markup
-            )
-        except (errors.MessageIdInvalid, errors.MessageNotModified, errors.ChatAdminRequired, Exception) as e:
-            logger.info(f"Could not edit message {msg.id}, attempting re-upload: {e}")
-
-            # Re-upload logic
+        # Retry logic with FloodWait handling
+        for attempt in range(3):
             try:
-                await client.send_photo(
+                await client.edit_message_media(
                     chat_id=msg.chat.id,
-                    photo=temp_out,
-                    caption=caption,
-                    parse_mode=enums.ParseMode.HTML,
+                    message_id=msg.id,
+                    media=InputMediaPhoto(temp_out, caption=caption, parse_mode=enums.ParseMode.HTML),
                     reply_markup=reply_markup
                 )
-                # Optionally delete old message if possible
+                break
+            except errors.FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+            except (errors.MessageIdInvalid, errors.MessageNotModified, errors.ChatAdminRequired, Exception) as e:
+                logger.info(f"Could not edit message {msg.id}, attempting re-upload: {e}")
+
+                # Re-upload logic
                 try:
-                    await client.delete_messages(msg.chat.id, msg.id)
-                except: pass
-            except Exception as re_e:
-                logger.error(f"Failed to re-upload {msg.id}: {re_e}")
-                if os.path.exists(temp_out): os.remove(temp_out)
-                return False
+                    await client.send_photo(
+                        chat_id=msg.chat.id,
+                        photo=temp_out,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_markup=reply_markup
+                    )
+                    # Optionally delete old message if possible
+                    try:
+                        await client.delete_messages(msg.chat.id, msg.id)
+                    except: pass
+                    break
+                except errors.FloodWait as fe:
+                    await asyncio.sleep(fe.value + 1)
+                except Exception as re_e:
+                    logger.error(f"Failed to re-upload {msg.id} on attempt {attempt}: {re_e}")
+                    if attempt == 2:
+                        if os.path.exists(temp_out): os.remove(temp_out)
+                        return False
+                    await asyncio.sleep(1)
 
         if os.path.exists(temp_out): os.remove(temp_out)
         return True

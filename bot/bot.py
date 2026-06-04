@@ -157,8 +157,15 @@ class Bot(Client):
         for chat_id in channels_to_cache:
             # Cache for Bot
             try:
-                await self.get_chat(chat_id)
-                logger.info(f"Cached chat {chat_id} for Bot")
+                # Ensure chat_id is properly formatted for get_chat
+                target = chat_id
+                if isinstance(target, str) and not target.startswith("@") and not target.lstrip("-").isdigit():
+                    target = f"@{target}"
+
+                await self.get_chat(target)
+                logger.info(f"Cached chat {target} for Bot")
+            except errors.PeerIdInvalid:
+                logger.warning(f"Bot could not cache chat {chat_id}: Peer ID invalid (Bot might not have access)")
             except Exception as e:
                 logger.warning(f"Bot could not cache chat {chat_id}: {e}")
 
