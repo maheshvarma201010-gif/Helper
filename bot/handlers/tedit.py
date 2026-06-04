@@ -410,7 +410,7 @@ async def handle_settings_input(client, message):
 
     elif action == "size":
         try:
-            val = int(message.text)
+            val = int(message.text.replace("%", "").strip())
             if 1 <= val <= 100:
                 settings["size"] = val
             else: raise ValueError()
