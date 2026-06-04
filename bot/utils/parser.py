@@ -37,15 +37,15 @@ def extract_metadata(text):
         r'E(\d+)',
         r'S\d+E(\d+)',
         r'\d+x(\d+)',
-        r'(?:\s|\[|-)(\d{1,4})(?:\s|\]|\.|$)'
+        r'(?:\s|\[|-|_)(\d{1,4})(?:\s|\]|\.|_|$)'
     ]
     episode = None
     for pattern in episode_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            # Avoid matching year like 2024 as episode
+            # Avoid matching year like 2024 as episode, or common qualities
             val = int(match.group(1))
-            if val < 2000:
+            if 0 <= val < 2000 and val not in [240, 360, 480, 540, 576, 720, 1080, 1440, 2160]:
                 episode = val
                 break
 

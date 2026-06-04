@@ -27,14 +27,16 @@ async def sequence_command(client, message):
         "➡️ Send /sort when you are ready to finish."
     )
     # Save the status message ID in sequence job to update it later
-    await db.update_replace_data(user_id, {"status_msg_id": status.id})
+    # Using a dedicated field in sequences instead of reusing replace_data
+    await db.sequences.update_one({"user_id": user_id}, {"$set": {"status_msg_id": status.id}}, upsert=True)
 
-@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]))
+@Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]), group=5)
 async def collect_files(client, message: Message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
     if state != "collecting_files":
+        message.continue_propagation()
         return
 
     if message.video or message.document or message.audio or message.animation:
@@ -62,7 +64,7 @@ async def collect_files(client, message: Message):
         count = len(files)
 
         if count % 10 == 0:
-            data = await db.get_replace_data(user_id)
+            data = await db.sequences.find_one({"user_id": user_id})
             if data and "status_msg_id" in data:
                 try:
                     await client.edit_message_text(

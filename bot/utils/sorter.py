@@ -14,19 +14,20 @@ QUALITY_ORDER = {
 
 def sort_files(files):
     """
-    Sorts files based on Season -> Quality -> Episode.
+    Sorts files based on Season -> Episode -> Quality.
+    This order better maintains the sequential viewing experience.
     """
-    # Defensive programming: ensure all keys exist
+    # Defensive programming: ensure all keys exist and are in correct format
     for f in files:
-        if 'season' not in f: f['season'] = 1
-        if 'episode' not in f: f['episode'] = 0
-        if 'quality' not in f: f['quality'] = "Unknown"
+        if 'season' not in f or f['season'] is None: f['season'] = 1
+        if 'episode' not in f or f['episode'] is None: f['episode'] = 0
+        if 'quality' not in f or f['quality'] is None: f['quality'] = "Unknown"
 
     return sorted(
         files,
         key=lambda x: (
             int(x['season']),
-            QUALITY_ORDER.get(x['quality'], 11),
-            int(x['episode'])
+            int(x['episode']),
+            QUALITY_ORDER.get(x['quality'], 11)
         )
     )
