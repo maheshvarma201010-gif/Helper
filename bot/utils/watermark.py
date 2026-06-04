@@ -5,6 +5,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Increase decompression bomb limit for large images
+Image.MAX_IMAGE_PIXELS = None
+
 def apply_watermark(image_path, settings, watermark_media_path=None):
     """
     Applies a watermark to an image based on settings.
