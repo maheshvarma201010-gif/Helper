@@ -109,6 +109,9 @@ class Bot(Client):
         # Peer caching logic
         await self.cache_peers()
 
+        # Recover TEdit Tasks
+        asyncio.create_task(self.recover_tedit_tasks())
+
         # Start Health Check & Redirect Server
         app = web.Application()
         aiohttp_jinja2.setup(app, loader=jinja2.FileSystemLoader(template_path))
@@ -144,6 +147,34 @@ class Bot(Client):
                 logger.info(f"Cached chat {chat_id} for Bot")
             except Exception as e:
                 logger.warning(f"Bot could not cache chat {chat_id}: {e}")
+
+    async def recover_tedit_tasks(self):
+        """
+        Resumes any unfinished TEdit range tasks found in the database.
+        """
+        logger.info("Checking for unfinished TEdit tasks...")
+        active_tasks = await db.get_active_tedit_tasks()
+
+        for task in active_tasks:
+            if task["type"] == "range":
+                user_id = task["user_id"]
+                logger.info(f"Resuming TEdit range task for user {user_id}")
+                # We need a message object or status_msg_id to update progress
+                # Since we can't easily re-fetch the original status message without its ID
+                # We'll just start the background processing.
+                # Note: This implementation assumes process_range_task handles its own status updates
+                # if a status_msg is provided. We might want to save status_msg_id in the task.
+                try:
+                    # Minimal mock for status_msg if needed, or just let it run
+                    # For now, we'll try to find if we have a status_msg_id
+                    status_msg = None
+                    # if "status_msg_id" in task:
+                    #    status_msg = await self.get_messages(user_id, task["status_msg_id"])
+
+                    from bot.handlers.tedit import process_range_task
+                    asyncio.create_task(process_range_task(self, status_msg, user_id))
+                except Exception as e:
+                    logger.error(f"Failed to resume task for {user_id}: {e}")
 
     async def stop(self, *args):
         await super().stop()

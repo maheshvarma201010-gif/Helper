@@ -19,6 +19,8 @@ class Database:
         self.search_cache = self.db["search_cache"]
         self.batches = self.db["batches"]
         self.fonts = self.db["fonts"]
+        self.tedit_settings = self.db["tedit_settings"]
+        self.tedit_tasks = self.db["tedit_tasks"]
 
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
@@ -124,5 +126,28 @@ class Database:
 
     async def delete_channel_font(self, channel_id):
         await self.fonts.delete_one({"channel_id": channel_id})
+
+    # TEdit Settings
+    async def get_tedit_settings(self, user_id):
+        return await self.tedit_settings.find_one({"user_id": user_id})
+
+    async def set_tedit_settings(self, user_id, data):
+        await self.tedit_settings.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
+
+    # TEdit Tasks
+    async def add_tedit_task(self, user_id, task_data):
+        await self.tedit_tasks.update_one({"user_id": user_id}, {"$set": task_data}, upsert=True)
+
+    async def get_tedit_task(self, user_id):
+        return await self.tedit_tasks.find_one({"user_id": user_id})
+
+    async def update_tedit_task(self, user_id, update_data):
+        await self.tedit_tasks.update_one({"user_id": user_id}, {"$set": update_data})
+
+    async def get_active_tedit_tasks(self):
+        return await self.tedit_tasks.find({"status": {"$in": ["running", "paused"]}}).to_list(length=None)
+
+    async def delete_tedit_task(self, user_id):
+        await self.tedit_tasks.delete_one({"user_id": user_id})
 
 db = Database()
