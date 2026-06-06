@@ -137,7 +137,14 @@ def apply_watermark(image_path, settings, watermark_media_path=None):
         # Save to bytes
         output = io.BytesIO()
         final_image = base_image.convert("RGB")
-        final_image.save(output, format="JPEG", quality=95)
+
+        # Try to preserve EXIF data if present
+        exif = base_image.info.get("exif")
+        if exif:
+            final_image.save(output, format="JPEG", quality=95, exif=exif)
+        else:
+            final_image.save(output, format="JPEG", quality=95)
+
         output.seek(0)
         return output
 

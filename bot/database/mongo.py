@@ -22,6 +22,7 @@ class Database:
         self.tedit_settings = self.db["tedit_settings"]
         self.tedit_jobs = self.db["tedit_jobs"]
         self.tedit_monitoring = self.db["tedit_monitoring"]
+        self.auto_approve = self.db["auto_approve"]
 
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
@@ -170,5 +171,17 @@ class Database:
 
     async def get_user_monitoring(self, user_id):
         return await self.tedit_monitoring.find({"user_id": user_id, "active": True}).to_list(length=None)
+
+    # Auto Approve
+    async def set_auto_approve(self, chat_id, status: bool):
+        await self.auto_approve.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"active": status}},
+            upsert=True
+        )
+
+    async def get_auto_approve(self, chat_id):
+        data = await self.auto_approve.find_one({"chat_id": chat_id})
+        return data["active"] if data else False
 
 db = Database()

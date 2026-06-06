@@ -223,7 +223,8 @@ async def tedit_preview_command(client, message):
             except Exception as e:
                 logger.warning(f"Failed to download watermark media for preview: {e}")
 
-    processed = apply_watermark(dummy_path, settings, media_path)
+    loop = asyncio.get_event_loop()
+    processed = await loop.run_in_executor(None, apply_watermark, dummy_path, settings, media_path)
 
     if processed:
         await message.reply_photo(processed, caption="🖼 **Watermark Preview**")
@@ -497,7 +498,8 @@ async def handle_preview(client, callback_query):
         if media_file_id:
             media_path = await client.download_media(media_file_id)
 
-    processed = apply_watermark(dummy_path, settings, media_path)
+    loop = asyncio.get_event_loop()
+    processed = await loop.run_in_executor(None, apply_watermark, dummy_path, settings, media_path)
 
     if processed:
         await callback_query.message.reply_photo(processed, caption="🖼 **Watermark Preview**")
@@ -750,8 +752,9 @@ async def process_message_watermark(client, msg, settings, watermark_media_path)
             path = await client.download_media(msg)
         if not path: return False
 
-        # Apply watermark
-        processed_bytes = apply_watermark(path, settings, watermark_media_path)
+        # Apply watermark in executor to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        processed_bytes = await loop.run_in_executor(None, apply_watermark, path, settings, watermark_media_path)
         os.remove(path)
 
         if not processed_bytes: return False
