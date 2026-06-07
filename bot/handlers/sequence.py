@@ -96,16 +96,38 @@ async def sort_command(client, message):
         await db.update_user_state(user_id, None)
         return
 
-    status = await message.reply_text("🚀 **Sorting and delivering files...**")
+    # Ask for sort type
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    buttons = [
+        [InlineKeyboardButton("Season -> Episode -> Quality", callback_data="seq_sort:standard")],
+        [InlineKeyboardButton("Episode -> Season -> Quality", callback_data="seq_sort:episode_wise")],
+        [InlineKeyboardButton("Quality -> Season -> Episode", callback_data="seq_sort:quality_wise")],
+        [InlineKeyboardButton("Alphabetical (Filename)", callback_data="seq_sort:filename_wise")],
+        [InlineKeyboardButton("Season Only", callback_data="seq_sort:season_only"),
+         InlineKeyboardButton("Episode Only", callback_data="seq_sort:episode_only")],
+        [InlineKeyboardButton("Reverse (Recently Added)", callback_data="seq_sort:reverse")]
+    ]
+    await message.reply_text("🎨 **Choose Sorting Method:**\nHow should I organize your files?", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # Sort files: Season -> Quality -> Episode
+@Client.on_callback_query(filters.regex(r"^seq_sort:(.+)"))
+async def handle_sort_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    sort_type = callback_query.matches[0].group(1)
+
+    files = await db.get_sequence_files(user_id)
+    if not files:
+        return await callback_query.answer("No files found to sort.", show_alert=True)
+
+    await callback_query.message.edit_text(f"🚀 **Sorting Method: `{sort_type}`**\n\nPreparing delivery...")
+
+    # Sort files
     try:
-        sorted_list = sort_files(files)
+        sorted_list = sort_files(files, sort_type=sort_type)
     except Exception as e:
         logger.error(f"Sorting error: {e}")
-        return await status.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
+        return await callback_query.message.edit_text(f"❌ **Sorting Engine Error:**\n`{e}`")
 
-    await status.edit_text(f"📦 **Delivering {len(sorted_list)} files with original formatting...**")
+    await callback_query.message.edit_text(f"📦 **Delivering {len(sorted_list)} files...**")
 
     count = 0
     for file_info in sorted_list:
@@ -129,7 +151,7 @@ async def sort_command(client, message):
     await db.clear_sequence_files(user_id)
     await db.update_user_state(user_id, None)
 
-    await status.reply_text(
+    await callback_query.message.reply_text(
         f"🏁 **Sequencing Finished!**\n\n"
         f"✅ **Total Files Organized:** `{count}`\n"
         f"📁 **Status:** `Success` 🧬"
