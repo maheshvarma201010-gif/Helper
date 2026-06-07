@@ -36,7 +36,7 @@ async def handle_domain_workflow(client, message):
         return
 
     if state == "awaiting_domain_first_link":
-        chat_id, msg_id = parse_message_link(message.text)
+        chat_id, msg_id, _ = parse_message_link(message.text)
         if not chat_id:
             return await message.reply_text("❌ Invalid link. Send a valid message link.")
         await db.update_domain_data(user_id, {"chat_id": chat_id, "first_msg_id": msg_id})
@@ -45,7 +45,7 @@ async def handle_domain_workflow(client, message):
 
     elif state == "awaiting_domain_last_link":
         data = await db.get_domain_data(user_id)
-        chat_id, msg_id = parse_message_link(message.text)
+        chat_id, msg_id, _ = parse_message_link(message.text)
         if not chat_id or chat_id != data.get("chat_id"):
             return await message.reply_text("❌ Link must be from the same channel.")
         await db.update_domain_data(user_id, {"last_msg_id": msg_id})

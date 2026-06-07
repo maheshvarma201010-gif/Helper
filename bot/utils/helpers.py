@@ -18,6 +18,7 @@ def parse_message_link(link):
         return None, None, None
 
     # Standard t.me link pattern including ranges
+    # Matches: https://t.me/c/123/10 or https://t.me/c/123/10-20 or https://t.me/username/10
     pattern = r'https://t\.me/(?:c/)?([^/]+)/(\d+)(?:-(\d+))?'
     match = re.search(pattern, link)
 
@@ -26,13 +27,15 @@ def parse_message_link(link):
         first_id = int(match.group(2))
         last_id = int(match.group(3)) if match.group(3) else first_id
 
-        if chat_id_str.isdigit():
+        # chat_id_str could be '123' (private) or 'username' (public)
+        if chat_id_str.lstrip("-").isdigit():
             chat_id = int(chat_id_str)
             if not str(chat_id).startswith("-100"):
                  chat_id = int(f"-100{chat_id}")
             return chat_id, first_id, last_id
         else:
-            return f"@{chat_id_str}", first_id, last_id
+            chat_id = f"@{chat_id_str}"
+            return chat_id, first_id, last_id
 
     # Handle numeric chat_id strings directly
     if isinstance(link, str) and (link.startswith("-100") or link.isdigit()):

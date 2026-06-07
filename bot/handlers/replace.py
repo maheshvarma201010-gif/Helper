@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 async def replace_command(client, message):
     user_id = message.from_user.id
     await db.clear_replace_data(user_id)
-    await db.update_user_state(user_id, "awaiting_first_link")
+    await db.update_user_state(user_id, "awaiting_replace_first_link")
     await message.reply_text("Send FIRST message link.")
 
 @Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "b", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]), group=3)
@@ -21,12 +21,12 @@ async def handle_replace_workflow(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
-    if not state or not state.startswith("awaiting_") or state.startswith("awaiting_domain_"):
+    if not state or not state.startswith("awaiting_replace_"):
         message.continue_propagation()
         return
 
-    if state == "awaiting_first_link":
-        chat_id, msg_id = parse_message_link(message.text)
+    if state == "awaiting_replace_first_link":
+        chat_id, msg_id, _ = parse_message_link(message.text)
         if not chat_id:
             return await message.reply_text("❌ Invalid link. Please send a valid message link.")
 
@@ -34,29 +34,29 @@ async def handle_replace_workflow(client, message):
             return await message.reply_text("❌ This channel is not authorized for text replacement.")
 
         await db.update_replace_data(user_id, {"chat_id": chat_id, "first_msg_id": msg_id})
-        await db.update_user_state(user_id, "awaiting_last_link")
+        await db.update_user_state(user_id, "awaiting_replace_last_link")
         await message.reply_text("Send LAST message link.")
 
-    elif state == "awaiting_last_link":
+    elif state == "awaiting_replace_last_link":
         replace_data = await db.get_replace_data(user_id)
         if not replace_data:
             await db.update_user_state(user_id, None)
             return await message.reply_text("Session expired. Please start over with /replace")
 
-        chat_id, msg_id = parse_message_link(message.text)
+        chat_id, msg_id, _ = parse_message_link(message.text)
         if not chat_id or chat_id != replace_data.get("chat_id"):
             return await message.reply_text("❌ Invalid link or link from different chat.")
 
         await db.update_replace_data(user_id, {"last_msg_id": msg_id})
-        await db.update_user_state(user_id, "awaiting_old_text")
+        await db.update_user_state(user_id, "awaiting_replace_old_text")
         await message.reply_text("Which text/link/username should be replaced?")
 
-    elif state == "awaiting_old_text":
+    elif state == "awaiting_replace_old_text":
         await db.update_replace_data(user_id, {"old_text": message.text})
-        await db.update_user_state(user_id, "awaiting_new_text")
+        await db.update_user_state(user_id, "awaiting_replace_new_text")
         await message.reply_text("Replace with?")
 
-    elif state == "awaiting_new_text":
+    elif state == "awaiting_replace_new_text":
         await db.update_replace_data(user_id, {"new_text": message.text})
         await start_replacement(client, message, user_id)
 
