@@ -5,6 +5,7 @@ from pyrogram import Client, filters, errors, enums
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
 from bot.utils.replacer import replace_in_html, replace_in_buttons, render_message_to_html
+from bot.utils.stylizer import destylize
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,9 @@ async def handle_replace_workflow(client, message):
         await message.reply_text("Which text/link/username should be replaced?")
 
     elif state == "awaiting_replace_old_text":
-        await db.update_replace_data(user_id, {"old_text": message.text})
+        # Destylize the search term to ensure it matches mathematical font chars
+        old_text = destylize(message.text)
+        await db.update_replace_data(user_id, {"old_text": old_text})
         await db.update_user_state(user_id, "awaiting_replace_new_text")
         await message.reply_text("Replace with?")
 

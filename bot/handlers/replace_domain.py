@@ -5,6 +5,7 @@ from pyrogram import Client, filters, errors, enums
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
 from bot.utils.replacer import replace_in_html, replace_in_buttons, render_message_to_html
+from bot.utils.stylizer import destylize
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,9 @@ async def handle_domain_workflow(client, message):
         await message.reply_text("🔍 **Enter OLD Domain/Text to replace:**\nExample: `https://old.com` or `old.com`")
 
     elif state == "awaiting_old_domain":
-        await db.update_domain_data(user_id, {"old_text": message.text})
+        # Destylize domain search term
+        old_text = destylize(message.text)
+        await db.update_domain_data(user_id, {"old_text": old_text})
         await db.update_user_state(user_id, "awaiting_new_domain")
         await message.reply_text("🔄 **Enter NEW Domain/Text:**\nExample: `https://new.com` or `new.com`")
 

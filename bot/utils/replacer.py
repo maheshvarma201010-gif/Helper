@@ -7,31 +7,22 @@ from bot.utils.stylizer import destylize
 def replace_text(text, old_text, new_text):
     """
     Robust string replacement that handles stylized text.
-    1. Try exact match.
-    2. Try case-insensitive match.
-    3. Try match on destylized version.
+    Applies all replacement types sequentially to ensure coverage.
     """
     if not text:
         return text
 
-    # 1. Exact match
-    res = text.replace(old_text, new_text)
-    if res != text:
-        return res
-
-    # 2. Case-insensitive regex match
+    # 1. Exact & Case-insensitive match on original text
     pattern = re.compile(re.escape(old_text), re.IGNORECASE)
-    res = pattern.sub(new_text, text)
-    if res != text:
-        return res
+    text = pattern.sub(new_text, text)
 
-    # 3. Match on destylized version
+    # 2. Match on destylized version
+    # If the destylized version contains the old_text (case-insensitive),
+    # we replace in the destylized version.
     clean_text = destylize(text)
     if old_text.lower() in clean_text.lower():
-        # If the destylized version matches, we replace in it.
-        # This is aggressive: it replaces the stylized text with the new text (likely in normal font).
-        # This satisfies the requirement "replace even that is in different font".
-        return pattern.sub(new_text, clean_text)
+        # This replaces stylized characters with new_text
+        text = pattern.sub(new_text, clean_text)
 
     return text
 
@@ -145,31 +136,24 @@ def replace_in_html(html_text, old_text, new_text):
     if not html_text:
         return html_text
 
-    # 1. Exact match
-    res = html_text.replace(old_text, new_text)
-    if res != html_text:
-        return res
+    # Standardize old_text by destylizing it first
+    old_text = destylize(old_text)
 
-    # 2. Case-insensitive regex match
-    pattern = re.compile(re.escape(old_text), re.IGNORECASE)
-    res = pattern.sub(new_text, html_text)
-    if res != html_text:
-        return res
+    # Apply all replacement passes sequentially
 
-    # 3. Protocol-agnostic match for URLs (e.g., matching http:// even if query was https://)
+    # 1. Protocol-agnostic match for URLs (e.g., matching http:// even if query was https://)
     clean_old = re.sub(r'^https?://', '', old_text)
     if clean_old != old_text:
         pattern = re.compile(r'https?://' + re.escape(clean_old), re.IGNORECASE)
-        res = pattern.sub(new_text, html_text)
-        if res != html_text:
-            return res
+        html_text = pattern.sub(new_text, html_text)
 
-    # 4. Destylize check: if the content contains stylized versions of old_text
+    # 2. Standard Case-insensitive regex match
+    pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+    html_text = pattern.sub(new_text, html_text)
+
+    # 3. Destylize & Hyperlink check: if the content contains stylized versions or hidden links
     clean_html = destylize(html_text)
-    if old_text.lower() in clean_html.lower():
-        # If the destylized version matches, we replace the entire block
-        # to ensure that stylized text and hyperlinks are properly handled.
-
+    if old_text.lower() in clean_html.lower() or 'href="' in html_text:
         # Split by tags and handle text parts
         tag_pattern = r'(<[^>]+>)'
         parts = re.split(tag_pattern, html_text)
@@ -179,31 +163,20 @@ def replace_in_html(html_text, old_text, new_text):
             if p.startswith('<') and p.endswith('>'):
                 # Handle URLs inside tags like <a href="...">
                 if 'href="' in p:
-                    # For URLs inside href, we need to be careful.
-                    # We'll use a specific replacement for the URL content.
                     url_match = re.search(r'href="([^"]+)"', p)
                     if url_match:
                         full_tag = p
                         url_content = url_match.group(1)
-                        new_url = replace_in_html(url_content, old_text, new_text)
-                        p = full_tag.replace(f'href="{url_content}"', f'href="{new_url}"')
+                        # Avoid infinite recursion by checking if replacement is needed
+                        if old_text.lower() in destylize(url_content).lower():
+                             # Use simple replace for internal URL to avoid complex nesting
+                             new_url = replace_text(url_content, old_text, new_text)
+                             p = full_tag.replace(f'href="{url_content}"', f'href="{new_url}"')
                 new_parts.append(p)
             else:
                 # Replace in the text part using robust replace_text
                 new_parts.append(replace_text(p, old_text, new_text))
 
-        # After processing parts, join them
-        res = "".join(new_parts)
-        if res != html_text:
-            return res
-
-        # Last resort: if still no change but destylize shows it should,
-        # replace based on the destylized match
-        # This part is highly aggressive and might lose some formatting,
-        # but satisfies "bot also replace even that is in different font".
-        pattern = re.compile(re.escape(old_text), re.IGNORECASE)
-        # We can't easily map back, so we replace in the destylized version
-        # and accept the loss of original style for this specific piece.
-        return pattern.sub(new_text, clean_html)
+        html_text = "".join(new_parts)
 
     return html_text
