@@ -6,23 +6,25 @@ from bot.utils.stylizer import destylize
 
 def replace_text(text, old_text, new_text):
     """
-    Robust string replacement that handles stylized text.
-    Applies all replacement types sequentially to ensure coverage.
+    God Ultra Ultimate Robust string replacement.
+    Handles stylized text, HTML entities, and Unicode mathematical blocks.
     """
     if not text:
         return text
 
-    # 1. Exact & Case-insensitive match on original text
+    # 1. Standard Case-insensitive match on original text
     pattern = re.compile(re.escape(old_text), re.IGNORECASE)
     text = pattern.sub(new_text, text)
 
-    # 2. Match on destylized version
-    # If the destylized version contains the old_text (case-insensitive),
-    # we replace in the destylized version.
-    clean_text = destylize(text)
-    if old_text.lower() in clean_text.lower():
-        # This replaces stylized characters with new_text
-        text = pattern.sub(new_text, clean_text)
+    # 2. Match on Destylized + Unescaped version
+    # Handles: &#𝘅𝟮𝟳; -> &#x27; -> '
+    # Handles: 𝗴𝗼𝗼𝗴𝗹𝗲.𝗰𝗼𝗺 -> google.com
+    clean = html.unescape(destylize(text))
+    if old_text.lower() in clean.lower():
+        # If found in clean version, we return the replaced clean version.
+        # This satisfies "replace anywhere" even if it means losing original font
+        # for that specific piece of text.
+        text = pattern.sub(new_text, clean)
 
     return text
 
@@ -130,8 +132,8 @@ def render_message_to_html(text, entities):
 
 def replace_in_html(html_text, old_text, new_text):
     """
-    Replaces text in HTML-formatted string.
-    Handles stylized text, hyperlinked text, and protocol-agnostic matching.
+    God Ultra Ultimate Replaces text in HTML-formatted string.
+    Handles stylized text, hyperlinked text, entities and protocol-agnostic matching.
     """
     if not html_text:
         return html_text
@@ -141,7 +143,7 @@ def replace_in_html(html_text, old_text, new_text):
 
     # Apply all replacement passes sequentially
 
-    # 1. Protocol-agnostic match for URLs (e.g., matching http:// even if query was https://)
+    # 1. Protocol-agnostic match for URLs
     clean_old = re.sub(r'^https?://', '', old_text)
     if clean_old != old_text:
         pattern = re.compile(r'https?://' + re.escape(clean_old), re.IGNORECASE)
@@ -151,32 +153,29 @@ def replace_in_html(html_text, old_text, new_text):
     pattern = re.compile(re.escape(old_text), re.IGNORECASE)
     html_text = pattern.sub(new_text, html_text)
 
-    # 3. Destylize & Hyperlink check: if the content contains stylized versions or hidden links
-    clean_html = destylize(html_text)
-    if old_text.lower() in clean_html.lower() or 'href="' in html_text:
-        # Split by tags and handle text parts
-        tag_pattern = r'(<[^>]+>)'
-        parts = re.split(tag_pattern, html_text)
-        new_parts = []
-        for p in parts:
-            if not p: continue
-            if p.startswith('<') and p.endswith('>'):
-                # Handle URLs inside tags like <a href="...">
-                if 'href="' in p:
-                    url_match = re.search(r'href="([^"]+)"', p)
-                    if url_match:
-                        full_tag = p
-                        url_content = url_match.group(1)
-                        # Avoid infinite recursion by checking if replacement is needed
-                        if old_text.lower() in destylize(url_content).lower():
-                             # Use simple replace for internal URL to avoid complex nesting
-                             new_url = replace_text(url_content, old_text, new_text)
-                             p = full_tag.replace(f'href="{url_content}"', f'href="{new_url}"')
-                new_parts.append(p)
-            else:
-                # Replace in the text part using robust replace_text
-                new_parts.append(replace_text(p, old_text, new_text))
+    # 3. Deep Scan (Destylize, Unescape, Hyperlink target)
+    # This pass ensures even complex hidden links and stylized entities are caught.
+    tag_pattern = r'(<[^>]+>)'
+    parts = re.split(tag_pattern, html_text)
+    new_parts = []
+    for p in parts:
+        if not p: continue
+        if p.startswith('<') and p.endswith('>'):
+            # Handle hidden URLs in href attributes
+            if 'href="' in p:
+                url_match = re.search(r'href="([^"]+)"', p)
+                if url_match:
+                    full_tag = p
+                    url_content = url_match.group(1)
+                    # Check if URL content (unescaped/destylized) matches
+                    clean_url = html.unescape(destylize(url_content))
+                    if old_text.lower() in clean_url.lower():
+                        # Replace in URL content
+                        new_url = pattern.sub(new_text, clean_url)
+                        p = full_tag.replace(f'href="{url_content}"', f'href="{new_url}"')
+            new_parts.append(p)
+        else:
+            # Replace in text parts using God-mode replace_text
+            new_parts.append(replace_text(p, old_text, new_text))
 
-        html_text = "".join(new_parts)
-
-    return html_text
+    return "".join(new_parts)
