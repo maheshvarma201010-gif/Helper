@@ -15,7 +15,7 @@ async def handle_auto_input(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
-    if not state or not state.startswith("awaiting_button_"):
+    if not state or (not state.startswith("awaiting_button_") and state != "awaiting_forward_tag"):
         message.continue_propagation()
         return
 
@@ -45,13 +45,8 @@ async def handle_auto_input(client, message):
         names.append(text)
 
         await db.button_configs.update_one({"user_id": user_id}, {"$set": {"names": names}})
-
-        if index < config["count"]:
-            await db.update_user_state(user_id, f"awaiting_button_name_{index + 1}")
-            await message.reply_text(f"Enter name for **Button {index + 1}**:")
-        else:
-            await db.update_user_state(user_id, "awaiting_button_url_1")
-            await message.reply_text("Great! Now let's collect the URLs.\n\nEnter URL for **Button 1**:")
+        await db.update_user_state(user_id, f"awaiting_button_url_{index}")
+        await message.reply_text(f"Enter URL for **Button {index}**:")
 
     elif state.startswith("awaiting_button_url_"):
         index = int(state.split("_")[-1])
@@ -62,12 +57,11 @@ async def handle_auto_input(client, message):
 
         urls = config.get("urls", [])
         urls.append(text)
-
         await db.button_configs.update_one({"user_id": user_id}, {"$set": {"urls": urls}})
 
         if index < config["count"]:
-            await db.update_user_state(user_id, f"awaiting_button_url_{index + 1}")
-            await message.reply_text(f"Enter URL for **Button {index + 1}**:")
+            await db.update_user_state(user_id, f"awaiting_button_name_{index + 1}")
+            await message.reply_text(f"Enter name for **Button {index + 1}**:")
         else:
             await db.update_user_state(user_id, "awaiting_forward_tag")
             await message.reply_text("Last step! Enter the **Forward Tag**.\n(Buttons will only be attached if this text is found in the caption/text)")
