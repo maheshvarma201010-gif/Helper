@@ -15,7 +15,7 @@ async def handle_auto_input(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
-    if not state or not state.startswith("awaiting_button_"):
+    if not state or (not state.startswith("awaiting_button_") and state != "awaiting_buttons_per_row"):
         message.continue_propagation()
         return
 
