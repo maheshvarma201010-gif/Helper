@@ -142,6 +142,10 @@ class Bot(Client):
         from bot.handlers.tedit import init_worker
         await init_worker(self)
 
+        # Start Forward Worker
+        from bot.handlers.forward import init_forward_worker
+        await init_forward_worker(self)
+
     async def cache_peers(self):
         """
         Caches essential peers in the local storage to avoid 'Peer ID invalid' errors.

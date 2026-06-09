@@ -11,6 +11,8 @@ class Database:
         self.sequences = self.db["sequences"]
         self.replace_jobs = self.db["replace_jobs"]
         self.domain_jobs = self.db["domain_jobs"]
+        self.forward_jobs = self.db["forward_jobs"]
+        self.button_configs = self.db["button_configs"]
 
         # New collections for Userbot and Search
         self.settings = self.db["settings"]
@@ -37,6 +39,37 @@ class Database:
     async def get_user_state(self, user_id):
         user = await self.users.find_one({"user_id": user_id})
         return user.get("state") if user else None
+
+    # Sessions
+    async def set_session(self, user_id, string_session):
+        await self.sessions.update_one({"user_id": user_id}, {"$set": {"session": string_session}}, upsert=True)
+
+    async def get_session(self, user_id):
+        data = await self.sessions.find_one({"user_id": user_id})
+        return data["session"] if data else None
+
+    # Button Configurations
+    async def set_button_config(self, user_id, config):
+        await self.button_configs.update_one({"user_id": user_id}, {"$set": config}, upsert=True)
+
+    async def get_button_config(self, user_id):
+        return await self.button_configs.find_one({"user_id": user_id})
+
+    # Forward Jobs
+    async def add_forward_job(self, job_data):
+        await self.forward_jobs.insert_one(job_data)
+
+    async def update_forward_job(self, job_id, update_data):
+        await self.forward_jobs.update_one({"job_id": job_id}, {"$set": update_data})
+
+    async def get_forward_job(self, job_id):
+        return await self.forward_jobs.find_one({"job_id": job_id})
+
+    async def get_active_forward_job(self, user_id):
+        return await self.forward_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued"]}})
+
+    async def get_all_active_forward_jobs(self):
+        return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
 
     # Settings and Channels
     async def set_source_channel(self, channel_id):

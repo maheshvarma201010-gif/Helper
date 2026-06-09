@@ -544,10 +544,15 @@ async def handle_settings_input(client, message):
     is_channel = state.startswith("tedit_ch_awaiting_")
     channel_id = None
     if is_channel:
-        # State format: tedit_ch_awaiting_ACTION_CHANNELID
+        # Robustly split to handle actions with underscores like custom_pos
+        # Pattern: tedit_ch_awaiting_ACTION_CHANNELID
+        # e.g., tedit_ch_awaiting_custom_pos_-100123
         parts = state.replace("tedit_ch_awaiting_", "").split("_")
-        action = parts[0]
-        channel_id = int(parts[1]) if len(parts) > 1 else None
+        channel_id_str = parts[-1]
+        action = "_".join(parts[:-1])
+        try:
+            channel_id = int(channel_id_str)
+        except: channel_id = None
 
         monitoring = await db.tedit_monitoring.find_one({"user_id": user_id, "channel_id": channel_id})
         settings = (monitoring or {}).get("settings") or (await db.get_tedit_settings(user_id) or DEFAULT_SETTINGS).copy()
