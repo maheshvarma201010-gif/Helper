@@ -60,10 +60,23 @@ class Database:
 
     # Forward Jobs
     async def add_forward_job(self, job_data):
+        if "message_queue" not in job_data:
+            job_data["message_queue"] = []
         await self.forward_jobs.insert_one(job_data)
 
     async def update_forward_job(self, job_id, update_data):
         await self.forward_jobs.update_one({"job_id": job_id}, {"$set": update_data})
+
+    async def append_to_forward_queue(self, job_id, message_id):
+        await self.forward_jobs.update_one({"job_id": job_id}, {"$push": {"message_queue": message_id}})
+
+    async def pop_from_forward_queue(self, job_id):
+        job = await self.forward_jobs.find_one_and_update(
+            {"job_id": job_id},
+            {"$pop": {"message_queue": -1}},
+            return_document=True
+        )
+        return job["message_queue"][0] if job and job.get("message_queue") else None
 
     async def get_forward_job(self, job_id):
         return await self.forward_jobs.find_one({"job_id": job_id})

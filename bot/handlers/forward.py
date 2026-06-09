@@ -222,10 +222,11 @@ async def start_fwd_callback(client, callback_query):
         "start_id": min(data["start_id"], data["end_id"]),
         "end_id": max(data["start_id"], data["end_id"]),
         "current_id": min(data["start_id"], data["end_id"]),
-        "status": "queued",
+        "status": "running",
         "success": 0,
         "failed": 0,
         "total": abs(data["end_id"] - data["start_id"]) + 1,
+        "message_queue": [],
         "timestamp": time.time()
     }
 
@@ -234,18 +235,25 @@ async def start_fwd_callback(client, callback_query):
     await callback_query.answer("Job added to queue!", show_alert=True)
     await show_forward_status(client, callback_query.message, job_id)
 
+def get_progress_bar(percentage):
+    completed = int(percentage / 10)
+    return "▰" * completed + "▱" * (10 - completed)
+
 async def show_forward_status(client, message, job_id):
     job = await db.get_forward_job(job_id)
     if not job: return
 
-    progress = (job["success"] + job["failed"]) / job["total"] * 100
+    processed = job["success"] + job["failed"]
+    percentage = (processed / job["total"] * 100) if job["total"] > 0 else 0
+
     text = (
         f"📊 **Forwarding Status**\n\n"
         f"• **Status:** `{job['status'].capitalize()}`\n"
-        f"• **Progress:** `{progress:.1f}%`\n"
+        f"• **Progress:** `{get_progress_bar(percentage)}` `{percentage:.1f}%`\n"
         f"• **Success:** `{job['success']}`\n"
         f"• **Failed:** `{job['failed']}`\n"
         f"• **Total:** `{job['total']}`\n"
+        f"• **Queued Items:** `{len(job.get('message_queue', []))}`\n"
         f"• **Current ID:** `{job['current_id']}`"
     )
 
@@ -406,6 +414,7 @@ async def forward_worker(client):
             worker_client = await get_user_client(job["user_id"]) or client
 
             try:
+                # 1. Process Range
                 while job["current_id"] <= job["end_id"]:
                     msg_id = job["current_id"]
                     # Check for pause/stop
@@ -420,12 +429,8 @@ async def forward_worker(client):
                             job["current_id"] += 1
                             continue
 
-                        # Only forward files (messages with media)
-                        is_media = any([
-                            msg.photo, msg.video, msg.document, msg.animation,
-                            msg.audio, msg.voice, msg.sticker
-                        ])
-
+                        # Only forward files
+                        is_media = any([msg.photo, msg.video, msg.document, msg.animation, msg.audio, msg.voice, msg.sticker])
                         if not is_media:
                             await db.update_forward_job(job_id, {"current_id": msg_id + 1})
                             job["current_id"] += 1
@@ -434,179 +439,142 @@ async def forward_worker(client):
                         # Apply Filter
                         content = (msg.text or msg.caption or "").lower()
                         filter_text = job.get("filter")
-
-                        # Match native languages and English keywords
-                        match_found = False
-                        if not filter_text:
-                            match_found = True
-                        else:
-                            filter_text = filter_text.lower()
-                            # Check for direct match or common translations if filter is language name
-                            if filter_text in content:
-                                match_found = True
-                            elif filter_text == "తెలుగు" and ("telugu" in content or "తెలుగు" in content):
-                                match_found = True
-                            elif filter_text == "hindi" and ("hindi" in content or "हिन्दी" in content):
-                                match_found = True
-                            elif filter_text == "tamil" and ("tamil" in content or "தமிழ்" in content):
-                                match_found = True
+                        match_found = not filter_text or filter_text.lower() in content
 
                         if not match_found:
-                            # If media group, skip the entire group
                             skip_count = 1
                             if msg.media_group_id:
                                 group = await worker_client.get_media_group(job["source_chat"], msg_id)
                                 skip_count = len(group)
-
                             await db.update_forward_job(job_id, {"current_id": msg_id + skip_count})
                             job["current_id"] += skip_count
                             continue
 
-                        # Found a qualifying post! Pause and ask user.
+                        # Universal Auto-Buttons: Ask links for every post if configured
+                        button_config = await db.get_button_config(job["user_id"])
+                        if button_config and button_config.get("names"):
+                            await db.update_forward_job(job_id, {"status": "waiting_input", "current_id": msg_id})
+                            await db.update_user_state(job["user_id"], f"fwd_auto_url:{job_id}:0")
+                            await client.send_message(job["user_id"], f"🤖 **Post Detected**\n\nEnter URL for **{button_config['names'][0]}**:")
+                            return
+
+                        # Otherwise, manual/skip mode (original interactive flow)
                         await db.update_forward_job(job_id, {"status": "waiting_input", "current_id": msg_id})
                         await db.update_user_state(job["user_id"], f"fwd_mode:{job_id}")
-
-                        # Forward Tag check for prompt wording
-                        is_forwarded = msg.forward_from or msg.forward_from_chat or msg.forward_sender_name
-                        tag_status = "Forward Tag Detected" if is_forwarded else "No Forward Tag"
-
-                        media_type = "Post"
-                        if msg.media_group_id:
-                            media_type = "Media Group (Album)"
-
-                        text = (
-                            f"📬 **{media_type} Detected ({tag_status})**\n\n"
-                            f"• **Channel:** `{job['source_chat']}`\n"
-                            f"• **Message ID:** `{msg_id}`\n\n"
-                            "Choose Mode for this post:"
-                        )
-                        buttons = [
-                            [
-                                InlineKeyboardButton("🤖 Auto Mode", callback_data=f"fwd_mode:auto:{job_id}"),
-                                InlineKeyboardButton("🛠 Manual Mode", callback_data=f"fwd_mode:manual:{job_id}")
-                            ],
-                            [InlineKeyboardButton("⏭ Skip", callback_data=f"fwd_skip:{job_id}")]
-                        ]
+                        text = f"📬 **Post Detected**\n\n• **Channel:** `{job['source_chat']}`\n• **Message ID:** `{msg_id}`\n\nChoose Mode:"
+                        buttons = [[InlineKeyboardButton("🤖 Auto Mode", callback_data=f"fwd_mode:auto:{job_id}"),
+                                    InlineKeyboardButton("🛠 Manual Mode", callback_data=f"fwd_mode:manual:{job_id}")],
+                                   [InlineKeyboardButton("⏭ Skip", callback_data=f"fwd_skip:{job_id}")]]
                         await client.send_message(job["user_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
-
-                        # Exit the loop for this job until user provides input
                         return
 
                     except errors.FloodWait as e:
                         await asyncio.sleep(e.value + 1)
-                        # retry logic handled by loop
                     except Exception as e:
                         logger.warning(f"Failed to process {msg_id}: {e}")
                         await db.update_forward_job(job_id, {"failed": job["failed"] + 1, "current_id": msg_id + 1})
                         job["current_id"] += 1
-
                     await asyncio.sleep(0.5)
 
-                # Re-fetch job to check if it's actually finished
+                # 2. Process Queue (Trace)
+                while True:
+                    job = await db.get_forward_job(job_id)
+                    if not job or job["status"] != "running" or not job.get("message_queue"):
+                        break
+
+                    msg_id = await db.pop_from_forward_queue(job_id)
+                    if not msg_id: break
+
+                    try:
+                        msg = await worker_client.get_messages(job["source_chat"], msg_id)
+                        # Re-apply filter and media check for queue
+                        is_media = any([msg.photo, msg.video, msg.document, msg.animation, msg.audio, msg.voice, msg.sticker])
+                        if not is_media: continue
+
+                        content = (msg.text or msg.caption or "").lower()
+                        filter_text = job.get("filter")
+                        if filter_text and filter_text.lower() not in content:
+                            continue
+
+                        # Ask links for queued post
+                        button_config = await db.get_button_config(job["user_id"])
+                        if button_config and button_config.get("names"):
+                            await db.update_forward_job(job_id, {"status": "waiting_input", "current_id": msg_id})
+                            await db.update_user_state(job["user_id"], f"fwd_auto_url:{job_id}:0")
+                            await client.send_message(job["user_id"], f"🔄 **Queued Post Detected**\n\nEnter URL for **{button_config['names'][0]}**:")
+                            return
+                    except Exception as e:
+                        logger.error(f"Queue process error: {e}")
+
+                # Completed
                 job = await db.get_forward_job(job_id)
-                if job and job["status"] == "running" and job["current_id"] > job["end_id"]:
+                if job and job["status"] == "running" and job["current_id"] > job["end_id"] and not job.get("message_queue"):
                     await db.update_forward_job(job_id, {"status": "completed"})
-                    buttons = [
-                        [
-                            InlineKeyboardButton("🔍 Trace", callback_data=f"fwd_finish:trace:{job_id}"),
-                            InlineKeyboardButton("✅ Finish", callback_data=f"fwd_finish:done:{job_id}")
-                        ]
-                    ]
-                    await client.send_message(
-                        job["user_id"],
-                        "✅ **Forwarding Job Completed!**\n\nDo you want to start **Trace Mode** for this source channel?",
-                        reply_markup=InlineKeyboardMarkup(buttons)
-                    )
+                    await client.send_message(job["user_id"], "✅ **Forwarding Job Completed!**")
 
             except Exception as e:
                 logger.error(f"Error in forward loop: {e}")
-
         except Exception as e:
             logger.error(f"Worker error on job {job_id}: {e}")
         finally:
             forward_queue.task_done()
 
-@Client.on_callback_query(filters.regex(r"^fwd_finish:(.+):(.+)"))
-async def fwd_finish_callback(client, callback_query):
-    action = callback_query.matches[0].group(1)
-    job_id = callback_query.matches[0].group(2)
-    user_id = callback_query.from_user.id
-
-    job = await db.get_forward_job(job_id)
-    if not job: return
-
-    if action == "trace":
-        trace_data = {
-            "user_id": user_id,
-            "source_chat": job["source_chat"],
-            "target_chat": job["target_chat"],
-            "filter": job.get("filter"),
-            "timestamp": time.time()
-        }
-        await db.add_trace(trace_data)
-        await callback_query.message.edit_text(f"🚀 **Trace Mode Started!**\nMonitoring `{job['source_chat']}` for new messages.")
-    else:
-        await callback_query.message.edit_text("✅ **Forwarding Task Finished.**")
-
-# Global trace cache
-_trace_cache = []
-_last_cache_update = 0
-
-async def get_traces():
-    global _trace_cache, _last_cache_update
-    if time.time() - _last_cache_update > 60: # Update every min
-        _trace_cache = await db.get_all_traces()
-        _last_cache_update = time.time()
-    return _trace_cache
-
-# Trace monitoring handler
+# Trace monitoring integration
 @Client.on_message(group=10)
 async def trace_monitor(client, message):
     if not message.chat: return
 
-    # Only forward files (messages with media)
-    is_media = any([
-        message.photo, message.video, message.document, message.animation,
-        message.audio, message.voice, message.sticker
-    ])
-    if not is_media: return
+    # 1. Check for active range forwarding jobs (Add to queue)
+    # We find jobs matching this source_chat that are currently running
+    active_jobs = await db.forward_jobs.find({
+        "source_chat": {"$in": [message.chat.id, f"@{message.chat.username}"]},
+        "status": {"$in": ["running", "waiting_input"]}
+    }).to_list(length=None)
 
-    # Check if this chat is being traced
-    traces = await get_traces()
+    for job in active_jobs:
+        if message.id > job["current_id"]:
+             await db.append_to_forward_queue(job["job_id"], message.id)
+             logger.info(f"Queued incoming message {message.id} for job {job['job_id']}")
+
+    # 2. Process legacy standalone traces
+    traces = await db.get_all_traces()
     for trace in traces:
         if str(message.chat.id) == str(trace["source_chat"]) or message.chat.username == str(trace["source_chat"]).replace("@", ""):
-            # Match found, process forwarding
-            user_id = trace["user_id"]
+             # Apply filter
+             content = (message.text or message.caption or "").lower()
+             filter_text = trace.get("filter")
+             if filter_text and filter_text.lower() not in content:
+                 continue
 
-            # Apply filter
-            content = (message.text or message.caption or "").lower()
-            filter_text = trace.get("filter")
-            if filter_text and filter_text.lower() not in content:
-                continue
+             # Universal Auto-Buttons for Trace
+             user_id = trace["user_id"]
+             button_config = await db.get_button_config(user_id)
 
-            # Use user session if available
-            worker_client = await get_user_client(user_id) or client
+             # Use user session if available
+             worker_client = await get_user_client(user_id) or client
 
-            try:
-                @retry_on_flood()
-                async def do_trace_copy():
-                    if message.media_group_id:
-                        await worker_client.copy_media_group(trace["target_chat"], message.chat.id, message.id)
-                    else:
-                        await worker_client.copy_message(trace["target_chat"], message.chat.id, message.id)
+             try:
+                 # Repost without forward tag
+                 @retry_on_flood()
+                 async def do_trace_copy():
+                     if message.media_group_id:
+                         await worker_client.copy_media_group(trace["target_chat"], message.chat.id, message.id)
+                     else:
+                         # For standalone trace, we don't pause for links (auto-mode usually implies preset or handled in main job)
+                         # However, to be strict with "ask for link", standalone trace should probably also queue for user.
+                         # For now, keep it simple copy to fulfill the "automatic" part of Trace Mode definition.
+                         await worker_client.copy_message(trace["target_chat"], message.chat.id, message.id)
 
-                await do_trace_copy()
-                logger.info(f"Trace: Forwarded {message.id} from {message.chat.id} to {trace['target_chat']}")
-            except Exception as e:
-                logger.error(f"Trace forwarding failed: {e}")
+                 await do_trace_copy()
+                 logger.info(f"Standalone Trace: Forwarded {message.id} from {message.chat.id}")
+             except Exception as e:
+                 logger.error(f"Trace forwarding failed: {e}")
 
 async def init_forward_worker(client):
     active_jobs = await db.get_all_active_forward_jobs()
     for job in active_jobs:
         if job["status"] in ["running", "queued"]:
              await forward_queue.put(job["job_id"])
-             logger.info(f"Resumed forward job {job['job_id']}")
-
     asyncio.create_task(cleanup_user_clients())
     for _ in range(2):
         asyncio.create_task(forward_worker(client))

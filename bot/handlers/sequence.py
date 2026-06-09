@@ -26,8 +26,13 @@ async def sequence_command(client, message):
         "✨ **Total Collected:** `0` files\n\n"
         "➡️ Send /sort when you are ready to finish."
     )
+
+    # Auto-pin the progress message
+    try:
+        await status.pin(disable_notification=True)
+    except: pass
+
     # Save the status message ID in sequence job to update it later
-    # Using a dedicated field in sequences instead of reusing replace_data
     await db.sequences.update_one({"user_id": user_id}, {"$set": {"status_msg_id": status.id}}, upsert=True)
 
 @Client.on_message(filters.private & ~filters.command(["sort", "sequence", "start", "replace", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "redirect", "font", "fontchannel", "replace_domain", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview"]), group=5)
@@ -63,15 +68,17 @@ async def collect_files(client, message: Message):
         files = await db.get_sequence_files(user_id)
         count = len(files)
 
-        if count % 10 == 0:
+        if count % 5 == 0: # More frequent updates
             data = await db.sequences.find_one({"user_id": user_id})
             if data and "status_msg_id" in data:
                 try:
+                    # Simple progress bar for collection
+                    progress = "▰" * (min(count // 5, 10)) + "▱" * max(0, 10 - (count // 5))
                     await client.edit_message_text(
                         chat_id=user_id,
                         message_id=data["status_msg_id"],
                         text=f"🔄 **File Collection In Progress**\n\n"
-                             f"Organizing your media library...\n\n"
+                             f"Progress: `{progress}`\n"
                              f"✨ **Total Collected:** `{count}` files\n\n"
                              f"➡️ Send more files or /sort to finalize the order."
                     )
