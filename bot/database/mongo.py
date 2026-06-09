@@ -74,6 +74,20 @@ class Database:
     async def get_all_active_forward_jobs(self):
         return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
 
+    # Traces
+    async def add_trace(self, trace_data):
+        await self.db["traces"].update_one(
+            {"user_id": trace_data["user_id"], "source_chat": trace_data["source_chat"]},
+            {"$set": trace_data},
+            upsert=True
+        )
+
+    async def get_all_traces(self):
+        return await self.db["traces"].find().to_list(length=None)
+
+    async def remove_trace(self, user_id, source_chat):
+        await self.db["traces"].delete_one({"user_id": user_id, "source_chat": source_chat})
+
     # Settings and Channels
     async def set_source_channel(self, channel_id):
         await self.settings.update_one({"key": "source_channel"}, {"$set": {"value": channel_id}}, upsert=True)

@@ -7,6 +7,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from bot.database.mongo import db
 from bot.config import Config
 from bot.utils.helpers import parse_message_link, resolve_chat
+from bot.utils.decorators import retry_on_flood
 
 logger = logging.getLogger(__name__)
 
@@ -306,8 +307,17 @@ async def fwd_skip_callback(client, callback_query):
     job = await db.get_forward_job(job_id)
     if not job: return
 
+    msg_id = job["current_id"]
+    worker_client = await get_user_client(job["user_id"]) or client
+    msg = await worker_client.get_messages(job["source_chat"], msg_id)
+
+    skip_count = 1
+    if msg and msg.media_group_id:
+        group = await worker_client.get_media_group(job["source_chat"], msg_id)
+        skip_count = len(group)
+
     await db.update_forward_job(job_id, {
-        "current_id": job["current_id"] + 1,
+        "current_id": job["current_id"] + skip_count,
         "status": "running"
     })
     await forward_queue.put(job_id)
@@ -315,7 +325,7 @@ async def fwd_skip_callback(client, callback_query):
     try:
         await callback_query.message.delete()
     except: pass
-    await callback_query.answer("Skipped message.")
+    await callback_query.answer("Skipped message(s).")
 
 async def finalize_forward(client, user_id, job_id, rows):
     job = await db.get_forward_job(job_id)
@@ -342,33 +352,37 @@ async def finalize_forward(client, user_id, job_id, rows):
 
         reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
 
-        # Repost without forward tag (copy_message)
-        # Handle retries for stability
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
+        # Repost without forward tag (copy_message or copy_media_group)
+        processed_count = 1
+
+        @retry_on_flood()
+        async def do_copy():
+            nonlocal processed_count
+            if msg.media_group_id:
+                copied_messages = await worker_client.copy_media_group(
+                    chat_id=job["target_chat"],
+                    from_chat_id=job["source_chat"],
+                    message_id=msg_id
+                )
+                processed_count = len(copied_messages)
+            else:
                 await worker_client.copy_message(
                     chat_id=job["target_chat"],
                     from_chat_id=job["source_chat"],
                     message_id=msg_id,
                     reply_markup=reply_markup
                 )
-                break
-            except errors.FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-                if attempt == max_retries - 1: raise
-            except Exception:
-                if attempt == max_retries - 1: raise
-                await asyncio.sleep(2)
+
+        await do_copy()
 
         await db.update_forward_job(job_id, {
-            "success": job["success"] + 1,
-            "current_id": msg_id + 1,
+            "success": job["success"] + processed_count,
+            "current_id": msg_id + processed_count,
             "status": "running",
             "temp_buttons": [] # Clear temp data
         })
         await forward_queue.put(job_id)
-        await client.send_message(user_id, "✅ Message forwarded successfully! Moving to next...")
+        await client.send_message(user_id, "✅ Message(s) forwarded successfully! Moving to next...")
 
     except Exception as e:
         logger.error(f"Finalize forward failed: {e}")
@@ -392,7 +406,8 @@ async def forward_worker(client):
             worker_client = await get_user_client(job["user_id"]) or client
 
             try:
-                for msg_id in range(job["current_id"], job["end_id"] + 1):
+                while job["current_id"] <= job["end_id"]:
+                    msg_id = job["current_id"]
                     # Check for pause/stop
                     job = await db.get_forward_job(job_id)
                     if not job or job["status"] != "running":
@@ -402,25 +417,65 @@ async def forward_worker(client):
                         msg = await worker_client.get_messages(job["source_chat"], msg_id)
                         if not msg or msg.empty:
                             await db.update_forward_job(job_id, {"failed": job["failed"] + 1, "current_id": msg_id + 1})
+                            job["current_id"] += 1
+                            continue
+
+                        # Only forward files (messages with media)
+                        is_media = any([
+                            msg.photo, msg.video, msg.document, msg.animation,
+                            msg.audio, msg.voice, msg.sticker
+                        ])
+
+                        if not is_media:
+                            await db.update_forward_job(job_id, {"current_id": msg_id + 1})
+                            job["current_id"] += 1
                             continue
 
                         # Apply Filter
                         content = (msg.text or msg.caption or "").lower()
                         filter_text = job.get("filter")
-                        if filter_text and filter_text.lower() not in content:
-                            await db.update_forward_job(job_id, {"current_id": msg_id + 1})
+
+                        # Match native languages and English keywords
+                        match_found = False
+                        if not filter_text:
+                            match_found = True
+                        else:
+                            filter_text = filter_text.lower()
+                            # Check for direct match or common translations if filter is language name
+                            if filter_text in content:
+                                match_found = True
+                            elif filter_text == "తెలుగు" and ("telugu" in content or "తెలుగు" in content):
+                                match_found = True
+                            elif filter_text == "hindi" and ("hindi" in content or "हिन्दी" in content):
+                                match_found = True
+                            elif filter_text == "tamil" and ("tamil" in content or "தமிழ்" in content):
+                                match_found = True
+
+                        if not match_found:
+                            # If media group, skip the entire group
+                            skip_count = 1
+                            if msg.media_group_id:
+                                group = await worker_client.get_media_group(job["source_chat"], msg_id)
+                                skip_count = len(group)
+
+                            await db.update_forward_job(job_id, {"current_id": msg_id + skip_count})
+                            job["current_id"] += skip_count
                             continue
 
                         # Found a qualifying post! Pause and ask user.
                         await db.update_forward_job(job_id, {"status": "waiting_input", "current_id": msg_id})
                         await db.update_user_state(job["user_id"], f"fwd_mode:{job_id}")
 
-                        # Forward Tag check for prompt wording (optional but requested)
+                        # Forward Tag check for prompt wording
                         is_forwarded = msg.forward_from or msg.forward_from_chat or msg.forward_sender_name
                         tag_status = "Forward Tag Detected" if is_forwarded else "No Forward Tag"
 
+                        media_type = "Post"
+                        if msg.media_group_id:
+                            media_type = "Media Group (Album)"
+
                         text = (
-                            f"📬 **Post Detected ({tag_status})**\n\n"
+                            f"📬 **{media_type} Detected ({tag_status})**\n\n"
                             f"• **Channel:** `{job['source_chat']}`\n"
                             f"• **Message ID:** `{msg_id}`\n\n"
                             "Choose Mode for this post:"
@@ -435,8 +490,7 @@ async def forward_worker(client):
                         await client.send_message(job["user_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
 
                         # Exit the loop for this job until user provides input
-                        # Break instead of return to keep the worker task alive
-                        break
+                        return
 
                     except errors.FloodWait as e:
                         await asyncio.sleep(e.value + 1)
@@ -444,6 +498,7 @@ async def forward_worker(client):
                     except Exception as e:
                         logger.warning(f"Failed to process {msg_id}: {e}")
                         await db.update_forward_job(job_id, {"failed": job["failed"] + 1, "current_id": msg_id + 1})
+                        job["current_id"] += 1
 
                     await asyncio.sleep(0.5)
 
@@ -451,7 +506,17 @@ async def forward_worker(client):
                 job = await db.get_forward_job(job_id)
                 if job and job["status"] == "running" and job["current_id"] > job["end_id"]:
                     await db.update_forward_job(job_id, {"status": "completed"})
-                    await client.send_message(job["user_id"], "✅ **Forwarding Job Completed!**")
+                    buttons = [
+                        [
+                            InlineKeyboardButton("🔍 Trace", callback_data=f"fwd_finish:trace:{job_id}"),
+                            InlineKeyboardButton("✅ Finish", callback_data=f"fwd_finish:done:{job_id}")
+                        ]
+                    ]
+                    await client.send_message(
+                        job["user_id"],
+                        "✅ **Forwarding Job Completed!**\n\nDo you want to start **Trace Mode** for this source channel?",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
 
             except Exception as e:
                 logger.error(f"Error in forward loop: {e}")
@@ -460,6 +525,80 @@ async def forward_worker(client):
             logger.error(f"Worker error on job {job_id}: {e}")
         finally:
             forward_queue.task_done()
+
+@Client.on_callback_query(filters.regex(r"^fwd_finish:(.+):(.+)"))
+async def fwd_finish_callback(client, callback_query):
+    action = callback_query.matches[0].group(1)
+    job_id = callback_query.matches[0].group(2)
+    user_id = callback_query.from_user.id
+
+    job = await db.get_forward_job(job_id)
+    if not job: return
+
+    if action == "trace":
+        trace_data = {
+            "user_id": user_id,
+            "source_chat": job["source_chat"],
+            "target_chat": job["target_chat"],
+            "filter": job.get("filter"),
+            "timestamp": time.time()
+        }
+        await db.add_trace(trace_data)
+        await callback_query.message.edit_text(f"🚀 **Trace Mode Started!**\nMonitoring `{job['source_chat']}` for new messages.")
+    else:
+        await callback_query.message.edit_text("✅ **Forwarding Task Finished.**")
+
+# Global trace cache
+_trace_cache = []
+_last_cache_update = 0
+
+async def get_traces():
+    global _trace_cache, _last_cache_update
+    if time.time() - _last_cache_update > 60: # Update every min
+        _trace_cache = await db.get_all_traces()
+        _last_cache_update = time.time()
+    return _trace_cache
+
+# Trace monitoring handler
+@Client.on_message(group=10)
+async def trace_monitor(client, message):
+    if not message.chat: return
+
+    # Only forward files (messages with media)
+    is_media = any([
+        message.photo, message.video, message.document, message.animation,
+        message.audio, message.voice, message.sticker
+    ])
+    if not is_media: return
+
+    # Check if this chat is being traced
+    traces = await get_traces()
+    for trace in traces:
+        if str(message.chat.id) == str(trace["source_chat"]) or message.chat.username == str(trace["source_chat"]).replace("@", ""):
+            # Match found, process forwarding
+            user_id = trace["user_id"]
+
+            # Apply filter
+            content = (message.text or message.caption or "").lower()
+            filter_text = trace.get("filter")
+            if filter_text and filter_text.lower() not in content:
+                continue
+
+            # Use user session if available
+            worker_client = await get_user_client(user_id) or client
+
+            try:
+                @retry_on_flood()
+                async def do_trace_copy():
+                    if message.media_group_id:
+                        await worker_client.copy_media_group(trace["target_chat"], message.chat.id, message.id)
+                    else:
+                        await worker_client.copy_message(trace["target_chat"], message.chat.id, message.id)
+
+                await do_trace_copy()
+                logger.info(f"Trace: Forwarded {message.id} from {message.chat.id} to {trace['target_chat']}")
+            except Exception as e:
+                logger.error(f"Trace forwarding failed: {e}")
 
 async def init_forward_worker(client):
     active_jobs = await db.get_all_active_forward_jobs()

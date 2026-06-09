@@ -1,59 +1,51 @@
-# Ultimate Telegram Forward & Replacement Bot
+# Ultimate Telegram Forward & Management Bot
 
-A professional, production-ready Telegram bot for bulk message forwarding, text replacement, and advanced channel management. Optimized for stability and security.
+A professional, production-ready Telegram bot for bulk message forwarding, text replacement, real-time channel tracing, and advanced management. Optimized for stability, security, and high-volume tasks.
 
-## Features
+## 🚀 Features
 
 - **Advanced Forwarding**:
-    - Bulk forward messages between channels.
-    - Support for **String Sessions** to bypass bot limitations.
+    - Bulk forward messages using **String Sessions** to bypass bot API limits.
     - **Interactive Mode**: Choose between Auto and Manual button attachment for each post.
-    - **Caption Filtering**: Filter posts by text (supports all languages: English, Telugu, Hindi, Tamil, etc.).
-    - **No Forward Tag**: All messages are reposted without forward attribution.
+    - **Media Group Support**: Correct handling of albums and media groups.
+    - **Caption Filtering**: Filter posts by text (supports all Unicode languages: English, Telugu, Hindi, Tamil, etc.).
+    - **No Forward Tag**: All messages are reposted as new messages using `copy_message`.
     - Automatic FloodWait handling and retries.
-- **Auto Buttons**:
+- **Trace Mode (Real-Time)**:
+    - Automatically monitor source channels for new messages and forward them instantly to targets.
+    - Trace tasks survive bot restarts and maintain filter/button rules.
+- **Auto Button Templates**:
     - Pre-configure button names and row layouts with `/auto`.
-    - Quickly attach links during forwarding in Auto Mode.
+    - Attach links during forwarding with a single click.
 - **Bulk Replacement**:
     - Replace text, links, and usernames across channels using `/replace`.
     - Domain-wide replacement with `/replace_domain` (Owner only).
-- **File Sequencing & Sorting**:
-    - Collect and sort files by Quality, Episode, and Season using `/sequence` and `/sort`.
-- **Font Styling**:
-    - Apply Unicode font styles to messages or entire channels with `/font` and `/fontchannel`.
-- **Search & Indexing**:
-    - Index channels and search with fuzzy matching using `/search`.
-- **TEdit (Logo/Watermark)**:
+- **TEdit (Image Watermarking)**:
     - Automatically apply text, image, or sticker watermarks to new channel posts.
 - **Auto Approve**:
-    - Automatically accept join requests for your channels.
+    - Automatically accept join requests for your channels via `/autoapprove`.
+- **Search & Indexing**:
+    - Index channels and search with fuzzy matching using `/search`.
 
-## Commands
+## 🛠 Commands
 
 ### Forwarding & Sessions
-- `/ss <session>` - Save a Pyrogram String Session for forwarding.
+- `/ss <session>` - Store a Pyrogram String Session for all operations.
 - `/forward` - Start the bulk forwarding setup wizard.
-- `/auto` - Configure default button names and layout.
+- `/auto` - Configure default button names and layout templates.
 
-### Content Management
+### Real-Time Monitoring
+- `/stats` - (Admin Only) View active forwarding jobs, trace tasks, and session counts.
+- Trace Mode is initiated interactively after a `/forward` job completes.
+
+### Content & Management
 - `/sequence` - Enter collection mode to send files for sorting.
 - `/sort` - Sort collected files and deliver them to a target.
 - `/replace` - Start bulk text/link replacement.
-- `/replace_domain` - Perform domain-wide replacement.
-
-### Styling & Tools
-- `/font <link>` - Apply Unicode font style to a range of messages.
-- `/fontchannel` - Set default font for a channel.
 - `/tedit` - Configure image watermarking for a channel.
 - `/autoapprove` - Toggle auto-approval for join requests.
-- `/redirect <url>` - Retrieve the final destination of a shortened link.
 
-### Admin & Indexing
-- `/search <query>` - Search indexed content.
-- `/setchannel <id>` - Set source channel for indexing.
-- `/reindex` - Rescan source channel for content.
-
-## Setup & Deployment
+## ⚙️ Setup & Deployment
 
 ### Environment Variables
 - `BOT_TOKEN`: Your Telegram Bot Token.
@@ -67,8 +59,9 @@ A professional, production-ready Telegram bot for bulk message forwarding, text 
 
 ### Deployment
 1. Create a MongoDB database.
-2. Deploy the Dockerfile or run `python3 -m bot.bot`.
-3. Ensure the bot is an administrator in all source and target channels with "Edit Messages" and "Post Messages" permissions.
+2. Configure environment variables in `.env`.
+3. Deploy using Docker or run `python3 -m bot.bot`.
+4. Ensure the bot is an administrator in all source and target channels.
 
-## Stability & Performance
-The bot uses a queue-based worker system to handle large forwarding and watermarking jobs. It automatically handles Telegram's API limits (FloodWait) and retries failed operations to ensure 100% delivery.
+## 🛡 Stability & Security
+The bot utilizes a concurrent, queue-based worker system to handle heavy tasks without blocking. It includes automatic FloodWait recovery, persistent state storage for restart survival, and authenticated user sessions for maximum reliability.

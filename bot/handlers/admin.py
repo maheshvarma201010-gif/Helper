@@ -1,67 +1,51 @@
+import logging
 from pyrogram import Client, filters
-from bot.config import Config
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.database.mongo import db
-from bot.utils.indexer import index_channel
-from bot.utils.helpers import resolve_chat
+from bot.config import Config
 
-@Client.on_message(filters.command("setchannel") & filters.user(Config.ADMINS))
-async def set_channel_command(client, message):
-    if len(message.command) < 2:
-        return await message.reply_text("Usage: /setchannel -100xxxxxxxxxx")
+logger = logging.getLogger(__name__)
 
-    channel_id = message.command[1]
-    try:
-        # Try to resolve first to ensure access
-        worker = client
-        chat = await resolve_chat(worker, channel_id)
-        await db.set_source_channel(chat.id)
-        await message.reply_text(f"✅ Source channel updated to `{chat.title}` ({chat.id}) and cached.")
-    except Exception as e:
-        await message.reply_text(f"❌ Error: {e}")
+@Client.on_message(filters.command("stats") & filters.user(Config.ADMINS))
+async def stats_command(client, message):
+    sessions_count = await db.sessions.count_documents({})
+    active_jobs = await db.get_all_active_forward_jobs()
+    traces = await db.get_all_traces()
 
-@Client.on_message(filters.command("setbot") & filters.user(Config.ADMINS))
-async def set_bot_command(client, message):
-    if len(message.command) < 2:
-        return await message.reply_text("Usage: /setbot @DeepLinkBot")
+    text = (
+        "📊 **Bot Statistics**\n\n"
+        f"• **Stored Sessions:** `{sessions_count}`\n"
+        f"• **Active Forward Jobs:** `{len(active_jobs)}`\n"
+        f"• **Active Trace Tasks:** `{len(traces)}`\n"
+    )
 
-    bot_username = message.command[1].replace("@", "")
-    await db.set_batch_bot(bot_username)
-    await message.reply_text("Batch bot updated successfully.")
+    buttons = [
+        [InlineKeyboardButton("🔍 View Active Traces", callback_data="admin_view_traces")]
+    ]
 
-@Client.on_message(filters.command("reindex") & filters.user(Config.ADMINS))
-async def reindex_command(client, message):
-    source_id = await db.get_source_channel()
-    if not source_id:
-        return await message.reply_text("Source channel not set.")
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-    progress = await message.reply_text("Starting indexing...")
-    count = await index_channel(client, source_id, progress)
+@Client.on_callback_query(filters.regex(r"^admin_view_traces"))
+async def admin_view_traces(client, callback_query):
+    traces = await db.get_all_traces()
+    if not traces:
+        return await callback_query.answer("No active traces found.", show_alert=True)
 
-    if count >= 0:
-        await progress.edit_text(f"Indexing complete! Added {count} messages.")
-    else:
-        await progress.edit_text("Indexing failed.")
+    text = "🔍 **Active Trace Tasks**\n\n"
+    for i, trace in enumerate(traces, 1):
+        text += f"{i}. From `{trace['source_chat']}` to `{trace['target_chat']}` (User: `{trace['user_id']}`)\n"
 
-@Client.on_message(filters.command("verify") & filters.user(Config.ADMINS))
-async def verify_command(client, message):
-    source_id = await db.get_source_channel()
-    channels = list(Config.REPLACE_TEXT_CHANNELS)
-    if source_id:
-        channels.append(source_id)
+    buttons = []
+    for trace in traces:
+        buttons.append([InlineKeyboardButton(f"Stop {trace['source_chat']}", callback_data=f"stop_trace:{trace['user_id']}:{trace['source_chat']}")])
 
-    if not channels:
-        return await message.reply_text("No channels configured.")
+    await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-    msg = await message.reply_text("🔍 Verifying access...")
-    results = ["**Verification Results:**"]
+@Client.on_callback_query(filters.regex(r"^stop_trace:(.+):(.+)"))
+async def stop_trace_callback(client, callback_query):
+    user_id = int(callback_query.matches[0].group(1))
+    source_chat = callback_query.matches[0].group(2)
 
-    worker = client
-
-    for chat_id in set(channels):
-        try:
-            chat = await resolve_chat(worker, chat_id)
-            results.append(f"✅ `{chat_id}`: {chat.title}")
-        except Exception as e:
-            results.append(f"❌ `{chat_id}`: {e}")
-
-    await msg.edit_text("\n".join(results))
+    await db.remove_trace(user_id, source_chat)
+    await callback_query.answer(f"Stopped trace for {source_chat}")
+    await admin_view_traces(client, callback_query)
