@@ -67,25 +67,25 @@ class Database:
     async def update_forward_job(self, job_id, update_data):
         await self.forward_jobs.update_one({"job_id": job_id}, {"$set": update_data})
 
+    async def get_forward_job(self, job_id):
+        return await self.forward_jobs.find_one({"job_id": job_id})
+
+    async def get_active_forward_job(self, user_id):
+        return await self.forward_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued", "waiting_input"]}})
+
+    async def get_all_active_forward_jobs(self):
+        return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued", "waiting_input"]}}).to_list(length=None)
+
     async def append_to_forward_queue(self, job_id, message_id):
         await self.forward_jobs.update_one({"job_id": job_id}, {"$push": {"message_queue": message_id}})
 
     async def pop_from_forward_queue(self, job_id):
         job = await self.forward_jobs.find_one_and_update(
-            {"job_id": job_id},
+            {"job_id": job_id, "message_queue": {"$exists": True, "$not": {"$size": 0}}},
             {"$pop": {"message_queue": -1}},
             return_document=True
         )
-        return job["message_queue"][0] if job and job.get("message_queue") else None
-
-    async def get_forward_job(self, job_id):
-        return await self.forward_jobs.find_one({"job_id": job_id})
-
-    async def get_active_forward_job(self, user_id):
-        return await self.forward_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued"]}})
-
-    async def get_all_active_forward_jobs(self):
-        return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
+        return job["message_queue"][0] if job and "message_queue" in job else None
 
     # Traces
     async def add_trace(self, trace_data):

@@ -5,18 +5,24 @@ A professional, production-ready Telegram bot for bulk message forwarding, text 
 ## 🚀 Features
 
 - **Advanced Forwarding**:
-    - Bulk forward messages using **String Sessions** to bypass bot API limits.
-    - **Interactive Mode**: Choose between Auto and Manual button attachment for each post.
-    - **Media Group Support**: Correct handling of albums and media groups.
-    - **Caption Filtering**: Filter posts by text (supports all Unicode languages: English, Telugu, Hindi, Tamil, etc.).
+    - Bulk forward message ranges using **String Sessions** to bypass bot API limits.
+    - **Fully Automatic Range Forwarding**: Processes ranges and real-time queues without per-post interaction.
+    - **Interactive DM Forwarding**: Send media directly to the bot's DM to attach custom buttons (Auto/Manual modes) before forwarding to a target channel.
+    - **Media Group Support**: Robust handling of albums and media groups.
+    - **Caption Filtering**: Filter posts by text (supports all Unicode languages: English, తెలుగు, Hindi, Japanese, etc.).
     - **No Forward Tag**: All messages are reposted as new messages using `copy_message`.
     - Automatic FloodWait handling and retries.
-- **Trace Mode (Real-Time)**:
-    - Automatically monitor source channels for new messages and forward them instantly to targets.
-    - Trace tasks survive bot restarts and maintain filter/button rules.
+- **Trace Mode (Real-Time Queueing)**:
+    - Automatically monitor source channels while a forward job is active.
+    - New messages are added to a persistent queue and processed sequentially after the initial range.
+    - Supports standalone trace tasks that survive bot restarts.
 - **Auto Button Templates**:
     - Pre-configure button names and row layouts with `/auto`.
-    - Attach links during forwarding with a single click.
+    - Attach links during interactive DM forwarding with a sequential wizard.
+- **Improved Sequencer**:
+    - Collect and sort files by Quality, Episode, and Season using `/sequence`.
+    - **Auto-Pin Status**: The collection progress message is pinned automatically.
+    - **Visual Progress**: High-quality progress bars for real-time feedback.
 - **Bulk Replacement**:
     - Replace text, links, and usernames across channels using `/replace`.
     - Domain-wide replacement with `/replace_domain` (Owner only).
@@ -24,19 +30,17 @@ A professional, production-ready Telegram bot for bulk message forwarding, text 
     - Automatically apply text, image, or sticker watermarks to new channel posts.
 - **Auto Approve**:
     - Automatically accept join requests for your channels via `/autoapprove`.
-- **Search & Indexing**:
-    - Index channels and search with fuzzy matching using `/search`.
 
 ## 🛠 Commands
 
 ### Forwarding & Sessions
 - `/ss <session>` - Store a Pyrogram String Session for all operations.
-- `/forward` - Start the bulk forwarding setup wizard.
+- `/forward` - Start the bulk forwarding setup wizard (Range + Trace).
 - `/auto` - Configure default button names and layout templates.
 
 ### Real-Time Monitoring
 - `/stats` - (Admin Only) View active forwarding jobs, trace tasks, and session counts.
-- Trace Mode is initiated interactively after a `/forward` job completes.
+- Real-time Trace is integrated into the `/forward` job flow.
 
 ### Content & Management
 - `/sequence` - Enter collection mode to send files for sorting.
