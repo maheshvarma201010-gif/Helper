@@ -85,7 +85,7 @@ class Database:
             {"$pop": {"message_queue": -1}},
             return_document=True
         )
-        return job["message_queue"][0] if job and "message_queue" in job else None
+        return job["message_queue"][0] if job and "message_queue" in job and len(job["message_queue"]) > 0 else None
 
     # Traces
     async def add_trace(self, trace_data):
