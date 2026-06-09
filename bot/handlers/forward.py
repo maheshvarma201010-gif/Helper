@@ -134,12 +134,82 @@ async def handle_forward_input(client, message):
                 row.append(InlineKeyboardButton(btn["name"], url=btn["url"]))
             buttons.append(row)
         user_client = await get_user_client(user_id)
+        bot_me = await client.get_me()
         try:
-            await user_client.copy_message(target_id, user_id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
+            await user_client.copy_message(target_id, bot_me.id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
             await message.reply_text("✅ Forwarded!")
-        except Exception as e: await message.reply_text(f"❌ Failed: {e}")
+        except Exception as e:
+            logger.error(f"Interactive forward failed: {e}")
+            await message.reply_text(f"❌ Failed: {e}")
         await db.update_user_state(user_id, None)
         await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_dm_links": ""}})
+
+    elif state.startswith("dm_manual_count:"):
+        msg_id = state.split(":")[1]
+        if not text.isdigit(): return await message.reply_text("❌ Enter a number.")
+        count = int(text)
+        if count <= 0 or count > 20: return await message.reply_text("❌ Range: 1-20.")
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_manual": {"count": count, "btns": []}}})
+        await db.update_user_state(user_id, f"dm_manual_btn:{msg_id}:0")
+        await message.reply_text("✏️ Enter **Button 1 Name | Link**\nExample: `Google | https://google.com`")
+
+    elif state.startswith("dm_manual_btn:"):
+        _, msg_id, index = state.split(":")
+        index = int(index)
+        if " | " not in text: return await message.reply_text("❌ Format: `Name | Link`")
+        name, url = [x.strip() for x in text.split(" | ", 1)]
+        if not url.startswith("http"): return await message.reply_text("❌ Invalid URL.")
+
+        user_data = await db.get_user(user_id)
+        manual_data = user_data.get("temp_manual", {})
+        manual_data["btns"].append({"name": name, "url": url})
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_manual": manual_data}})
+
+        if index + 1 < manual_data["count"]:
+            await db.update_user_state(user_id, f"dm_manual_btn:{msg_id}:{index + 1}")
+            await message.reply_text(f"✏️ Enter **Button {index + 2} Name | Link**:")
+        else:
+            await db.update_user_state(user_id, f"dm_manual_rows:{msg_id}")
+            await message.reply_text("🔢 How many **buttons per row**?")
+
+    elif state.startswith("dm_manual_rows:"):
+        msg_id = state.split(":")[1]
+        if not text.isdigit(): return await message.reply_text("❌ Enter a number.")
+        rows = int(text)
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_manual.rows": rows}})
+        await db.update_user_state(user_id, f"dm_manual_target:{msg_id}")
+        await message.reply_text("✅ Config saved. Send **Target Channel ID/Username**.")
+
+    elif state.startswith("dm_manual_target:"):
+        msg_id = int(state.split(":")[1])
+        try:
+            target_chat = await resolve_chat(client, text)
+            target_id = target_chat.id
+        except Exception as e: return await message.reply_text(f"❌ Error: {e}")
+
+        user_data = await db.get_user(user_id)
+        manual_data = user_data.get("temp_manual", {})
+        btns = manual_data.get("btns", [])
+        rows = manual_data.get("rows", 1)
+
+        buttons = []
+        for i in range(0, len(btns), rows):
+            row = []
+            for b in btns[i:i+rows]:
+                row.append(InlineKeyboardButton(b["name"], url=b["url"]))
+            buttons.append(row)
+
+        user_client = await get_user_client(user_id)
+        bot_me = await client.get_me()
+        try:
+            await user_client.copy_message(target_id, bot_me.id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
+            await message.reply_text("✅ Forwarded (Manual)!")
+        except Exception as e:
+            logger.error(f"Manual interactive forward failed: {e}")
+            await message.reply_text(f"❌ Failed: {e}")
+
+        await db.update_user_state(user_id, None)
+        await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_manual": ""}})
     else:
         message.continue_propagation()
 
@@ -159,9 +229,13 @@ async def fwd_mode_callback(client, callback_query):
 async def handle_dm_media(client, message):
     user_id = message.from_user.id
     if await db.get_user_state(user_id): return
+
+    is_forwarded = bool(message.forward_from or message.forward_from_chat or message.forward_sender_name)
+    status_text = "🔄 **Forwarded Post Detected**" if is_forwarded else "📝 **New Post Detected**"
+
     buttons = [[InlineKeyboardButton("🤖 Auto", callback_data=f"dm_btn:auto:{message.id}"),
                 InlineKeyboardButton("🛠 Manual", callback_data=f"dm_btn:manual:{message.id}")]]
-    await message.reply_text("📬 **Interactive Forward**", reply_markup=InlineKeyboardMarkup(buttons))
+    await message.reply_text(f"{status_text}\n\nChoose your button configuration mode:", reply_markup=InlineKeyboardMarkup(buttons))
 
 @Client.on_callback_query(filters.regex(r"^dm_btn:(.+):(.+)"))
 async def dm_btn_callback(client, callback_query):
@@ -172,8 +246,10 @@ async def dm_btn_callback(client, callback_query):
         if not config: return await callback_query.answer("❌ Use /auto first.", show_alert=True)
         await db.users.update_one({"user_id": user_id}, {"$set": {"temp_dm_links": []}})
         await db.update_user_state(user_id, f"dm_auto_url:{msg_id}:0")
-        await callback_query.message.edit_text(f"🔗 URL for **{config['names'][0]}**:")
-    else: await callback_query.answer("Manual mode not implemented.", show_alert=True)
+        await callback_query.message.edit_text(f"🤖 **Auto Mode**\n\n🔗 URL for **{config['names'][0]}**:")
+    else:
+        await db.update_user_state(user_id, f"dm_manual_count:{msg_id}")
+        await callback_query.message.edit_text("🛠 **Manual Mode**\n\n🔢 How many buttons?")
 
 @Client.on_callback_query(filters.regex(r"^start_fwd:(.+)"))
 async def start_fwd_callback(client, callback_query):
@@ -232,10 +308,19 @@ async def forward_worker(client):
                 try:
                     msg = await user_client.get_messages(job["source_chat"], msg_id)
                     if not msg or msg.empty: return False, 1
-                    content = (msg.text or msg.caption or "").lower()
-                    if job.get("filter") and job["filter"].lower() not in content:
-                        count = len(await user_client.get_media_group(job["source_chat"], msg_id)) if msg.media_group_id else 1
-                        return False, count
+
+                    # Filtering logic
+                    if job.get("filter"):
+                        f = job["filter"].lower()
+                        text_to_check = [msg.text or "", msg.caption or ""]
+                        if msg.document: text_to_check.append(msg.document.file_name or "")
+                        if msg.video: text_to_check.append(msg.video.file_name or "")
+                        if msg.audio: text_to_check.append(msg.audio.file_name or "")
+
+                        content = " ".join(text_to_check).lower()
+                        if f not in content:
+                            count = len(await user_client.get_media_group(job["source_chat"], msg_id)) if msg.media_group_id else 1
+                            return False, count
 
                     if msg.media_group_id:
                         copied = await user_client.copy_media_group(job["target_chat"], job["source_chat"], msg_id)

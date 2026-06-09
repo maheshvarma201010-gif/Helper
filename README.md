@@ -1,71 +1,80 @@
-# Ultimate Telegram Forward & Management Bot
+# Telegram Forward & Watermark Bot
 
-A professional, production-ready Telegram bot for bulk message forwarding, text replacement, real-time channel tracing, and advanced management. Optimized for stability, security, and high-volume tasks.
+A powerful Telegram bot designed for automated message forwarding with custom buttons, Unicode caption filtering, and advanced image watermarking.
 
-## 🚀 Features
+## Features
 
-- **Advanced Forwarding**:
-    - Bulk forward message ranges using **String Sessions** to bypass bot API limits.
-    - **Fully Automatic Range Forwarding**: Processes ranges and real-time queues without per-post interaction.
-    - **Interactive DM Forwarding**: Send media directly to the bot's DM to attach custom buttons (Auto/Manual modes) before forwarding to a target channel.
-    - **Media Group Support**: Robust handling of albums and media groups.
-    - **Caption Filtering**: Filter posts by text (supports all Unicode languages: English, తెలుగు, Hindi, Japanese, etc.).
-    - **No Forward Tag**: All messages are reposted as new messages using `copy_message`.
-    - Automatic FloodWait handling and retries.
-- **Trace Mode (Real-Time Queueing)**:
-    - Automatically monitor source channels while a forward job is active.
-    - New messages are added to a persistent queue and processed sequentially after the initial range.
-    - Supports standalone trace tasks that survive bot restarts.
-- **Auto Button Templates**:
-    - Pre-configure button names and row layouts with `/auto`.
-    - Attach links during interactive DM forwarding with a sequential wizard.
-- **Improved Sequencer**:
-    - Collect and sort files by Quality, Episode, and Season using `/sequence`.
-    - **Auto-Pin Status**: The collection progress message is pinned automatically.
-    - **Visual Progress**: High-quality progress bars for real-time feedback.
-- **Bulk Replacement**:
-    - Replace text, links, and usernames across channels using `/replace`.
-    - Domain-wide replacement with `/replace_domain` (Owner only).
-- **TEdit (Image Watermarking)**:
-    - Automatically apply text, image, or sticker watermarks to new channel posts.
-- **Auto Approve**:
-    - Automatically accept join requests for your channels via `/autoapprove`.
+### 🚀 Advanced Forwarding
+- **String Session Support (`/ss`):** Securely use your own Telegram account for forwarding. Access private channels and restricted content.
+- **Range Forwarding (`/forward`):** Cleanly copy a range of messages between any two links.
+- **Reposting:** All forwarded messages are "reposted" (copied) to the target channel, removing the original forward attribution.
+- **Interactive Mode:**
+  - **Auto Mode:** Uses pre-configured button names (from `/auto`) and prompts for links.
+  - **Manual Mode:** Fully customize buttons (names, links, rows) for individual posts.
+- **Unicode Filtering:** Filter content by specific text in any language (Telugu, Hindi, Tamil, English, etc.) within captions or filenames.
+- **Media Group Support:** Correct handling of albums (multiple photos/videos).
+- **Trace Mode:** Real-time monitoring of source channels to automatically forward new posts as they arrive.
 
-## 🛠 Commands
+### 🔘 Button Management
+- **Persistent Setup (`/auto`):** Configure default button names and row layouts once and reuse them during forwarding.
+- **Interactive UI:** Guided setup flows for all configurations.
 
-### Forwarding & Sessions
-- `/ss <session>` - Store a Pyrogram String Session for all operations.
-- `/forward` - Start the bulk forwarding setup wizard (Range + Trace).
-- `/auto` - Configure default button names and layout templates.
+### 🖼️ TEdit (Image Watermarking)
+- **Automatic Monitoring:** Auto-watermark new posts in monitored channels.
+- **Multiple Watermark Types:** Support for Logos (images), Stickers, and Custom Text.
+- **Dynamic Styling:** Configure font size, position, transparency, and color.
+- **Proportional Scaling:** Watermarks automatically scale based on the source image dimensions.
 
-### Real-Time Monitoring
-- `/stats` - (Admin Only) View active forwarding jobs, trace tasks, and session counts.
-- Real-time Trace is integrated into the `/forward` job flow.
+### 🛠️ Utilities
+- **Font Stylizer:** Apply various Unicode fonts to text.
+- **Text Replacer:** Strict, multi-pass text replacement logic for captions.
+- **Auto Join:** Automatically joins source channels using invite links.
+- **FloodWait Protection:** Intelligent retry logic for Telegram API limits.
 
-### Content & Management
-- `/sequence` - Enter collection mode to send files for sorting.
-- `/sort` - Sort collected files and deliver them to a target.
-- `/replace` - Start bulk text/link replacement.
-- `/tedit` - Configure image watermarking for a channel.
-- `/autoapprove` - Toggle auto-approval for join requests.
+## Installation
 
-## ⚙️ Setup & Deployment
+### Prerequisites
+- Python 3.12+
+- MongoDB
+- Telegram API ID and Hash (from [my.telegram.org](https://my.telegram.org))
+- Bot Token (from [@BotFather](https://t.me/BotFather))
 
-### Environment Variables
-- `BOT_TOKEN`: Your Telegram Bot Token.
-- `API_ID`: Your Telegram API ID.
-- `API_HASH`: Your Telegram API Hash.
-- `MONGO_URI`: Your MongoDB Connection String.
-- `OWNER_ID`: Your Telegram User ID.
-- `ADMINS`: Comma-separated list of authorized Admin IDs.
-- `LOG_CHANNEL`: ID of the channel for logs.
-- `PORT`: Port for health check (default: 8080).
+### Local Setup
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/username/forward-bot.git
+   cd forward-bot
+   ```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Create a `.env` file based on `.env.example`:
+   ```env
+   API_ID=your_api_id
+   API_HASH=your_api_hash
+   BOT_TOKEN=your_bot_token
+   MONGO_URI=your_mongodb_uri
+   ```
+4. Run the bot:
+   ```bash
+   python -m bot
+   ```
 
-### Deployment
-1. Create a MongoDB database.
-2. Configure environment variables in `.env`.
-3. Deploy using Docker or run `python3 -m bot.bot`.
-4. Ensure the bot is an administrator in all source and target channels.
+## Usage
 
-## 🛡 Stability & Security
-The bot utilizes a concurrent, queue-based worker system to handle heavy tasks without blocking. It includes automatic FloodWait recovery, persistent state storage for restart survival, and authenticated user sessions for maximum reliability.
+### Commands
+- `/start` - Start the bot.
+- `/ss <session>` - Save your Pyrogram String Session.
+- `/auto` - Configure default button names and layout.
+- `/forward` - Start the range forwarding wizard.
+- `/tedit` - Access the watermarking setup menu.
+- `/replace` - Configure text replacement rules.
+- `/font` - Stylize text with custom fonts.
+
+## Deployment
+This bot is Docker-ready and can be deployed on platforms like Render, Heroku, or VPS.
+Refer to `Dockerfile` and `render.yaml` for configuration.
+
+## License
+MIT License
