@@ -8,7 +8,12 @@ logger = logging.getLogger(__name__)
 @Client.on_message(filters.command("ss") & filters.private)
 async def ss_command(client, message):
     user_id = message.from_user.id
-    await db.update_user_state(user_id, "awaiting_string_session")
+
+    if len(message.command) > 1:
+        string_session = message.command[1].strip()
+        return await validate_and_save_session(client, message, user_id, string_session)
+
+    await db.update_user_state(user_id, "ss_awaiting_session")
     await message.reply_text(
         "👋 **String Session Setup**\n\n"
         "Please send your Pyrogram String Session.\n"
@@ -16,17 +21,7 @@ async def ss_command(client, message):
         "⚠️ **Security Note:** Your session is stored securely and only used for your forwarding tasks."
     )
 
-@Client.on_message(filters.private & filters.text & filters.create(lambda _, __, m: not m.text.startswith("/")), group=6)
-async def handle_session_input(client, message):
-    user_id = message.from_user.id
-    state = await db.get_user_state(user_id)
-
-    if state != "awaiting_string_session":
-        message.continue_propagation()
-        return
-
-    string_session = message.text.strip()
-
+async def validate_and_save_session(client, message, user_id, string_session):
     # Basic validation attempt
     try:
         temp_client = Client(
@@ -47,3 +42,15 @@ async def handle_session_input(client, message):
     except Exception as e:
         logger.error(f"Session validation failed for {user_id}: {e}")
         await message.reply_text(f"❌ **Invalid String Session!**\nError: `{e}`\n\nPlease try again or send /cancel to abort.")
+
+@Client.on_message(filters.private & filters.text & filters.create(lambda _, __, m: not m.text.startswith("/")), group=6)
+async def handle_session_input(client, message):
+    user_id = message.from_user.id
+    state = await db.get_user_state(user_id)
+
+    if state != "ss_awaiting_session":
+        message.continue_propagation()
+        return
+
+    string_session = message.text.strip()
+    await validate_and_save_session(client, message, user_id, string_session)

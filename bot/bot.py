@@ -113,6 +113,20 @@ class Bot(Client):
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
 
+        # Set bot commands
+        await self.set_bot_commands([
+            enums.BotCommand("start", "Start the bot"),
+            enums.BotCommand("forward", "Forward message range"),
+            enums.BotCommand("ss", "Set string session"),
+            enums.BotCommand("auto", "Configure auto buttons"),
+            enums.BotCommand("tedit", "Watermark images"),
+            enums.BotCommand("sequence", "Sequence files"),
+            enums.BotCommand("replace", "Replace text"),
+            enums.BotCommand("autoapprove", "Toggle join request approval"),
+            enums.BotCommand("reindex", "Reindex channel (Admin)"),
+            enums.BotCommand("search", "Search indexed files")
+        ])
+
         # Ensure directories exist
         static_path = "bot/web/static"
         template_path = "bot/web/templates"

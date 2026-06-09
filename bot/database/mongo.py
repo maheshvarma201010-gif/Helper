@@ -55,6 +55,9 @@ class Database:
     async def get_button_config(self, user_id):
         return await self.button_configs.find_one({"user_id": user_id})
 
+    async def update_button_config(self, user_id, update_data):
+        await self.button_configs.update_one({"user_id": user_id}, {"$set": update_data}, upsert=True)
+
     # Forward Jobs
     async def add_forward_job(self, job_data):
         await self.forward_jobs.insert_one(job_data)
