@@ -50,21 +50,39 @@ def parse_message_link(link):
 
 async def resolve_chat(client, chat_id):
     """
-    Resiliently resolves a chat_id/username and ensures it's cached.
+    Resiliently resolves a chat_id/username/link and ensures it's cached.
     """
-    try:
-        # If it's a numeric ID, try to get it directly
-        return await client.get_chat(chat_id)
-    except Exception as e:
-        logger.warning(f"Failed to resolve {chat_id} directly: {e}")
+    if not isinstance(chat_id, str):
+        try:
+            return await client.get_chat(chat_id)
+        except:
+            raise ValueError(f"Could not resolve chat {chat_id}.")
 
-        # If it's a username, try with the @ prefix if not present
-        if isinstance(chat_id, str) and not chat_id.startswith("@") and not chat_id.startswith("-100"):
+    # Handle invite links / join links
+    if "t.me/+" in chat_id or "t.me/joinchat/" in chat_id:
+        try:
+            return await client.join_chat(chat_id)
+        except Exception as e:
+             logger.warning(f"Failed to join chat via link: {e}")
+             # If already joined, get_chat might still work
+             pass
+
+    # Clean username/id
+    clean_id = chat_id.split("/")[-1] if "/" in chat_id else chat_id
+
+    try:
+        # Try direct
+        return await client.get_chat(clean_id)
+    except Exception as e:
+        logger.warning(f"Failed to resolve {clean_id} directly: {e}")
+
+        # Try with @ prefix
+        if not clean_id.startswith("@") and not clean_id.lstrip("-").isdigit():
             try:
-                return await client.get_chat(f"@{chat_id}")
+                return await client.get_chat(f"@{clean_id}")
             except: pass
 
-    raise ValueError(f"Could not resolve chat {chat_id}. Ensure the bot is an admin in the channel.")
+    raise ValueError(f"Could not resolve chat {chat_id}. Ensure the bot is an admin in the channel or the link is valid.")
 
 def get_font_markup(action, channel_id=None):
     """

@@ -1,38 +1,61 @@
-# Ultimate Telegram File Sequencer & Replacement Bot (Bot-Only Version)
+# Ultimate Telegram Forward & Replacement Bot
 
-A professional, production-ready Telegram bot for sequencing files, bulk text replacement, and advanced channel font styling. This version is optimized for stability and uses only the official Telegram Bot API (no Userbot required).
+A professional, production-ready Telegram bot for bulk message forwarding, text replacement, and advanced channel management. Optimized for stability and security.
 
 ## Features
 
-- **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode using `/sequence` and `/sort`.
-- **Bulk Replacement**: Replace text, links, and usernames across channels.
+- **Advanced Forwarding**:
+    - Bulk forward messages between channels.
+    - Support for **String Sessions** to bypass bot limitations.
+    - **Interactive Mode**: Choose between Auto and Manual button attachment for each post.
+    - **Caption Filtering**: Filter posts by text (supports all languages: English, Telugu, Hindi, Tamil, etc.).
+    - **No Forward Tag**: All messages are reposted without forward attribution.
+    - Automatic FloodWait handling and retries.
+- **Auto Buttons**:
+    - Pre-configure button names and row layouts with `/auto`.
+    - Quickly attach links during forwarding in Auto Mode.
+- **Bulk Replacement**:
+    - Replace text, links, and usernames across channels using `/replace`.
+    - Domain-wide replacement with `/replace_domain` (Owner only).
+- **File Sequencing & Sorting**:
+    - Collect and sort files by Quality, Episode, and Season using `/sequence` and `/sort`.
 - **Font Styling**:
-    - `/font <link>`: Apply Unicode font styles to a range of messages (e.g., `https://t.me/c/123/10-20`).
-    - `/fontchannel`: Set a default font for all new posts in a channel.
-- **Search & Indexing**: Index channels and search with fuzzy matching.
-- **Production Ready**: Asynchronous architecture, MongoDB persistence, and Dockerized.
-- **Health Check**: Built-in HTTP server for deployment platforms like Render.
+    - Apply Unicode font styles to messages or entire channels with `/font` and `/fontchannel`.
+- **Search & Indexing**:
+    - Index channels and search with fuzzy matching using `/search`.
+- **TEdit (Logo/Watermark)**:
+    - Automatically apply text, image, or sticker watermarks to new channel posts.
+- **Auto Approve**:
+    - Automatically accept join requests for your channels.
 
 ## Commands
 
-### User Commands
-- `/start` - Get started and see available commands.
-- `/search <query>` - Search indexed content.
+### Forwarding & Sessions
+- `/ss <session>` - Save a Pyrogram String Session for forwarding.
+- `/forward` - Start the bulk forwarding setup wizard.
+- `/auto` - Configure default button names and layout.
+
+### Content Management
 - `/sequence` - Enter collection mode to send files for sorting.
-- `/replace` - Start the bulk text/link replacement workflow.
-- `/replace_domain` - Perform domain-wide replacement (Owner only).
-- `/font <message_link>` - Apply a Unicode font style to a range of messages.
-- `/fontchannel <channel_id>` - Set a default Unicode font for a channel.
-- `/redirect <url>` - Follow all HTTP redirects and retrieve the final destination URL.
+- `/sort` - Sort collected files and deliver them to a target.
+- `/replace` - Start bulk text/link replacement.
+- `/replace_domain` - Perform domain-wide replacement.
 
-### Admin Commands
-- `/setchannel <id>` - Set the source channel for indexing.
-- `/setbot <username>` - Set the batch bot username for search links.
-- `/reindex` - Scan or rescan the source channel for content.
-- `/verify` - Verify bot access and permissions in configured channels.
+### Styling & Tools
+- `/font <link>` - Apply Unicode font style to a range of messages.
+- `/fontchannel` - Set default font for a channel.
+- `/tedit` - Configure image watermarking for a channel.
+- `/autoapprove` - Toggle auto-approval for join requests.
+- `/redirect <url>` - Retrieve the final destination of a shortened link.
 
-## Environment Variables
+### Admin & Indexing
+- `/search <query>` - Search indexed content.
+- `/setchannel <id>` - Set source channel for indexing.
+- `/reindex` - Rescan source channel for content.
 
+## Setup & Deployment
+
+### Environment Variables
 - `BOT_TOKEN`: Your Telegram Bot Token.
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
@@ -41,15 +64,11 @@ A professional, production-ready Telegram bot for sequencing files, bulk text re
 - `ADMINS`: Comma-separated list of authorized Admin IDs.
 - `LOG_CHANNEL`: ID of the channel for logs.
 - `PORT`: Port for health check (default: 8080).
-- `REPLACE_TEXT_CHANNELS`: Comma-separated list of authorized channel IDs for replacement.
 
-## Deployment on Render
+### Deployment
+1. Create a MongoDB database.
+2. Deploy the Dockerfile or run `python3 -m bot.bot`.
+3. Ensure the bot is an administrator in all source and target channels with "Edit Messages" and "Post Messages" permissions.
 
-1. **Fork** this repository.
-2. Create a **MongoDB** database.
-3. Create a new **Web Service** on Render.
-4. Connect your repository and configure the environment variables.
-5. The bot will automatically start the health check server on the assigned port.
-
-## Note on Permissions
-Since this bot does not use a Userbot, it **MUST** be an administrator in any channel it needs to index, edit, or stylize. It needs "Edit Messages" and "Post Messages" permissions.
+## Stability & Performance
+The bot uses a queue-based worker system to handle large forwarding and watermarking jobs. It automatically handles Telegram's API limits (FloodWait) and retries failed operations to ensure 100% delivery.

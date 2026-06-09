@@ -55,6 +55,9 @@ class Database:
     async def get_button_config(self, user_id):
         return await self.button_configs.find_one({"user_id": user_id})
 
+    async def delete_button_config(self, user_id):
+        await self.button_configs.delete_one({"user_id": user_id})
+
     # Forward Jobs
     async def add_forward_job(self, job_data):
         await self.forward_jobs.insert_one(job_data)

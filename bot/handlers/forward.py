@@ -7,12 +7,49 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from bot.database.mongo import db
 from bot.config import Config
 from bot.utils.helpers import parse_message_link, resolve_chat
-from bot.utils.replacer import render_message_to_html
 
 logger = logging.getLogger(__name__)
 
 # Queue for forwarding tasks
 forward_queue = asyncio.Queue()
+
+# Cache for user clients to avoid start/stop overhead
+# Stores (client, last_activity_time)
+user_clients = {}
+
+async def get_user_client(user_id):
+    if user_id in user_clients:
+        client, _ = user_clients[user_id]
+        user_clients[user_id] = (client, time.time())
+        return client
+
+    session_string = await db.get_session(user_id)
+    if not session_string:
+        return None
+
+    client = Client(
+        f"worker_{user_id}",
+        api_id=Config.API_ID,
+        api_hash=Config.API_HASH,
+        session_string=session_string,
+        in_memory=True
+    )
+    await client.start()
+    user_clients[user_id] = (client, time.time())
+    return client
+
+async def cleanup_user_clients():
+    """Periodically closes inactive user sessions."""
+    while True:
+        await asyncio.sleep(600) # Check every 10 mins
+        now = time.time()
+        for user_id, (client, last_activity) in list(user_clients.items()):
+            if now - last_activity > 1800: # 30 mins inactivity
+                try:
+                    await client.stop()
+                except: pass
+                del user_clients[user_id]
+                logger.info(f"Closed inactive session for user {user_id}")
 
 @Client.on_message(filters.command("forward") & filters.private)
 async def forward_command(client, message):
@@ -25,12 +62,13 @@ async def handle_forward_input(client, message):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
 
-    if not state or not state.startswith("awaiting_forward_"):
+    if not state:
         message.continue_propagation()
         return
 
     text = message.text.strip()
 
+    # Setup Wizard
     if state == "awaiting_forward_start_link":
         chat_id, first_id, _ = parse_message_link(text)
         if not chat_id:
@@ -49,15 +87,27 @@ async def handle_forward_input(client, message):
 
         await db.update_replace_data(user_id, {"end_id": last_id})
         await db.update_user_state(user_id, "awaiting_forward_target")
-        await message.reply_text("✅ End link saved.\n\nNow send the **Target Channel ID** or **Invite Link**.")
+        await message.reply_text("✅ End link saved.\n\nNow send the **Target Channel Username/ID/Link**.")
 
     elif state == "awaiting_forward_target":
-        data = await db.get_replace_data(user_id)
         try:
             target_chat = await resolve_chat(client, text)
             target_id = target_chat.id
         except Exception as e:
             return await message.reply_text(f"❌ Could not resolve target chat: {e}")
+
+        await db.update_replace_data(user_id, {"target_chat": target_id, "target_title": target_chat.title})
+        await db.update_user_state(user_id, "awaiting_forward_filter")
+        await message.reply_text(
+            "🔍 **Caption Filter**\n\n"
+            "Do you want to forward only files containing specific text in the caption?\n"
+            "Examples: `English`, `తెలుగు`, `Hindi`\n\n"
+            "Send the text to filter by, or send /skip to forward all files."
+        )
+
+    elif state == "awaiting_forward_filter":
+        data = await db.get_replace_data(user_id)
+        filter_text = None if text == "/skip" else text
 
         await db.update_user_state(user_id, None)
 
@@ -65,16 +115,93 @@ async def handle_forward_input(client, message):
             "📋 **Forwarding Task Summary**\n\n"
             f"• **Source Chat:** `{data['source_chat']}`\n"
             f"• **Range:** `{data['start_id']}` to `{data['end_id']}`\n"
-            f"• **Target Chat:** `{target_chat.title}` (`{target_id}`)\n"
+            f"• **Target Chat:** `{data['target_title']}` (`{data['target_chat']}`)\n"
+            f"• **Filter:** `{filter_text or 'None'}`\n"
             f"• **Total Messages:** `{abs(data['end_id'] - data['start_id']) + 1}`\n\n"
             "Click the button below to start."
         )
 
         job_id = str(uuid.uuid4())
-        await db.update_replace_data(user_id, {"job_id": job_id, "target_chat": target_id})
+        await db.update_replace_data(user_id, {"job_id": job_id, "filter": filter_text})
 
         buttons = [[InlineKeyboardButton("🚀 Start Forwarding", callback_data=f"start_fwd:{job_id}")]]
         await message.reply_text(summary, reply_markup=InlineKeyboardMarkup(buttons))
+
+    # Interactive Forwarding Inputs
+    elif state.startswith("fwd_auto_url:"):
+        _, job_id, index = state.split(":")
+        index = int(index)
+
+        if not text.startswith(("http://", "https://")):
+             return await message.reply_text("❌ Invalid URL. Must start with http:// or https://")
+
+        job = await db.get_forward_job(job_id)
+        config = await db.get_button_config(user_id)
+
+        temp_buttons = job.get("temp_buttons", [])
+        temp_buttons.append({"name": config["names"][index], "url": text})
+        await db.update_forward_job(job_id, {"temp_buttons": temp_buttons})
+
+        if index + 1 < len(config["names"]):
+            await db.update_user_state(user_id, f"fwd_auto_url:{job_id}:{index + 1}")
+            await message.reply_text(f"🔗 Enter URL for **{config['names'][index + 1]}**:")
+        else:
+            await finalize_forward(client, user_id, job_id, config.get("rows", 1))
+
+    elif state.startswith("fwd_manual_count:"):
+        job_id = state.split(":")[1]
+        if not text.isdigit():
+            return await message.reply_text("❌ Please enter a valid number.")
+
+        count = int(text)
+        if count <= 0 or count > 20:
+            return await message.reply_text("❌ Please enter a number between 1 and 20.")
+
+        await db.update_forward_job(job_id, {"temp_count": count, "temp_buttons": []})
+        await db.update_user_state(user_id, f"fwd_manual_name:{job_id}:0")
+        await message.reply_text("Enter name for **Button 1**:")
+
+    elif state.startswith("fwd_manual_name:"):
+        _, job_id, index = state.split(":")
+        index = int(index)
+
+        job = await db.get_forward_job(job_id)
+        temp_buttons = job.get("temp_buttons", [])
+        temp_buttons.append({"name": text})
+        await db.update_forward_job(job_id, {"temp_buttons": temp_buttons})
+
+        await db.update_user_state(user_id, f"fwd_manual_url:{job_id}:{index}")
+        await message.reply_text(f"Enter URL for **{text}**:")
+
+    elif state.startswith("fwd_manual_url:"):
+        _, job_id, index = state.split(":")
+        index = int(index)
+
+        if not text.startswith(("http://", "https://")):
+             return await message.reply_text("❌ Invalid URL.")
+
+        job = await db.get_forward_job(job_id)
+        temp_buttons = job.get("temp_buttons", [])
+        temp_buttons[index]["url"] = text
+        await db.update_forward_job(job_id, {"temp_buttons": temp_buttons})
+
+        if index + 1 < job["temp_count"]:
+            await db.update_user_state(user_id, f"fwd_manual_name:{job_id}:{index + 1}")
+            await message.reply_text(f"Enter name for **Button {index + 2}**:")
+        else:
+            await db.update_user_state(user_id, f"fwd_manual_rows:{job_id}")
+            await message.reply_text("How many **buttons per row**?")
+
+    elif state.startswith("fwd_manual_rows:"):
+        job_id = state.split(":")[1]
+        if not text.isdigit():
+            return await message.reply_text("❌ Please enter a valid number.")
+
+        rows = int(text)
+        await finalize_forward(client, user_id, job_id, rows)
+
+    else:
+        message.continue_propagation()
 
 @Client.on_callback_query(filters.regex(r"^start_fwd:(.+)"))
 async def start_fwd_callback(client, callback_query):
@@ -90,6 +217,7 @@ async def start_fwd_callback(client, callback_query):
         "user_id": user_id,
         "source_chat": data["source_chat"],
         "target_chat": data["target_chat"],
+        "filter": data.get("filter"),
         "start_id": min(data["start_id"], data["end_id"]),
         "end_id": max(data["start_id"], data["end_id"]),
         "current_id": min(data["start_id"], data["end_id"]),
@@ -126,7 +254,7 @@ async def show_forward_status(client, message, job_id):
     elif job["status"] == "paused":
         buttons.append([InlineKeyboardButton("▶️ Resume", callback_data=f"fwd_ctrl:resume:{job_id}")])
 
-    if job["status"] != "completed" and job["status"] != "stopped":
+    if job["status"] not in ["completed", "stopped"]:
         buttons.append([InlineKeyboardButton("🛑 Stop", callback_data=f"fwd_ctrl:stop:{job_id}")])
 
     try:
@@ -151,31 +279,117 @@ async def fwd_ctrl_callback(client, callback_query):
 
     await show_forward_status(client, callback_query.message, job_id)
 
+@Client.on_callback_query(filters.regex(r"^fwd_mode:(.+):(.+)"))
+async def fwd_mode_callback(client, callback_query):
+    mode = callback_query.matches[0].group(1)
+    job_id = callback_query.matches[0].group(2)
+    user_id = callback_query.from_user.id
+
+    if mode == "auto":
+        config = await db.get_button_config(user_id)
+        if not config or not config.get("names"):
+            return await callback_query.answer("❌ No buttons configured in /auto. Use /auto first.", show_alert=True)
+
+        await db.update_user_state(user_id, f"fwd_auto_url:{job_id}:0")
+        await callback_query.message.edit_text(
+            f"🤖 **Auto Mode**\n\nEnter URL for **{config['names'][0]}**:"
+        )
+    else: # manual
+        await db.update_user_state(user_id, f"fwd_manual_count:{job_id}")
+        await callback_query.message.edit_text(
+            "🛠 **Manual Mode**\n\nHow many buttons do you want to add?"
+        )
+
+@Client.on_callback_query(filters.regex(r"^fwd_skip:(.+)"))
+async def fwd_skip_callback(client, callback_query):
+    job_id = callback_query.matches[0].group(1)
+    job = await db.get_forward_job(job_id)
+    if not job: return
+
+    await db.update_forward_job(job_id, {
+        "current_id": job["current_id"] + 1,
+        "status": "running"
+    })
+    await forward_queue.put(job_id)
+    await db.update_user_state(job["user_id"], None)
+    try:
+        await callback_query.message.delete()
+    except: pass
+    await callback_query.answer("Skipped message.")
+
+async def finalize_forward(client, user_id, job_id, rows):
+    job = await db.get_forward_job(job_id)
+    if not job: return
+
+    # Clear state
+    await db.update_user_state(user_id, None)
+
+    # Use user session if available
+    worker_client = await get_user_client(user_id) or client
+
+    try:
+        msg_id = job["current_id"]
+        msg = await worker_client.get_messages(job["source_chat"], msg_id)
+
+        # Build Keyboard
+        buttons = []
+        temp_btns = job.get("temp_buttons", [])
+        for i in range(0, len(temp_btns), rows):
+            row = []
+            for btn in temp_btns[i:i+rows]:
+                row.append(InlineKeyboardButton(btn["name"], url=btn["url"]))
+            buttons.append(row)
+
+        reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+
+        # Repost without forward tag (copy_message)
+        # Handle retries for stability
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await worker_client.copy_message(
+                    chat_id=job["target_chat"],
+                    from_chat_id=job["source_chat"],
+                    message_id=msg_id,
+                    reply_markup=reply_markup
+                )
+                break
+            except errors.FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+                if attempt == max_retries - 1: raise
+            except Exception:
+                if attempt == max_retries - 1: raise
+                await asyncio.sleep(2)
+
+        await db.update_forward_job(job_id, {
+            "success": job["success"] + 1,
+            "current_id": msg_id + 1,
+            "status": "running",
+            "temp_buttons": [] # Clear temp data
+        })
+        await forward_queue.put(job_id)
+        await client.send_message(user_id, "✅ Message forwarded successfully! Moving to next...")
+
+    except Exception as e:
+        logger.error(f"Finalize forward failed: {e}")
+        await db.update_forward_job(job_id, {
+            "failed": job["failed"] + 1,
+            "current_id": job["current_id"] + 1,
+            "status": "running"
+        })
+        await forward_queue.put(job_id)
+        await client.send_message(user_id, f"❌ Failed to forward message {job['current_id']}: {e}")
+
 async def forward_worker(client):
     while True:
         job_id = await forward_queue.get()
         try:
             job = await db.get_forward_job(job_id)
-            if not job or job["status"] in ["completed", "stopped"]:
+            if not job or job["status"] != "running":
                 continue
 
-            await db.update_forward_job(job_id, {"status": "running"})
-
             # Use user session if available
-            session_string = await db.get_session(job["user_id"])
-            if session_string:
-                worker_client = Client(
-                    f"worker_{job['user_id']}",
-                    api_id=Config.API_ID,
-                    api_hash=Config.API_HASH,
-                    session_string=session_string,
-                    in_memory=True
-                )
-                await worker_client.start()
-            else:
-                worker_client = client
-
-            button_config = await db.get_button_config(job["user_id"])
+            worker_client = await get_user_client(job["user_id"]) or client
 
             try:
                 for msg_id in range(job["current_id"], job["end_id"] + 1):
@@ -190,43 +404,57 @@ async def forward_worker(client):
                             await db.update_forward_job(job_id, {"failed": job["failed"] + 1, "current_id": msg_id + 1})
                             continue
 
-                        # Handle auto-buttons
-                        reply_markup = None
-                        if button_config and button_config.get("tag"):
-                            content = msg.text or msg.caption or ""
-                            if button_config["tag"].lower() in content.lower():
-                                buttons = []
-                                for name, url in zip(button_config["names"], button_config["urls"]):
-                                    buttons.append([InlineKeyboardButton(name, url=url)])
-                                reply_markup = InlineKeyboardMarkup(buttons)
+                        # Apply Filter
+                        content = (msg.text or msg.caption or "").lower()
+                        filter_text = job.get("filter")
+                        if filter_text and filter_text.lower() not in content:
+                            await db.update_forward_job(job_id, {"current_id": msg_id + 1})
+                            continue
 
-                        # Copy message
-                        await worker_client.copy_message(
-                            chat_id=job["target_chat"],
-                            from_chat_id=job["source_chat"],
-                            message_id=msg_id,
-                            reply_markup=reply_markup or msg.reply_markup
+                        # Found a qualifying post! Pause and ask user.
+                        await db.update_forward_job(job_id, {"status": "waiting_input", "current_id": msg_id})
+                        await db.update_user_state(job["user_id"], f"fwd_mode:{job_id}")
+
+                        # Forward Tag check for prompt wording (optional but requested)
+                        is_forwarded = msg.forward_from or msg.forward_from_chat or msg.forward_sender_name
+                        tag_status = "Forward Tag Detected" if is_forwarded else "No Forward Tag"
+
+                        text = (
+                            f"📬 **Post Detected ({tag_status})**\n\n"
+                            f"• **Channel:** `{job['source_chat']}`\n"
+                            f"• **Message ID:** `{msg_id}`\n\n"
+                            "Choose Mode for this post:"
                         )
+                        buttons = [
+                            [
+                                InlineKeyboardButton("🤖 Auto Mode", callback_data=f"fwd_mode:auto:{job_id}"),
+                                InlineKeyboardButton("🛠 Manual Mode", callback_data=f"fwd_mode:manual:{job_id}")
+                            ],
+                            [InlineKeyboardButton("⏭ Skip", callback_data=f"fwd_skip:{job_id}")]
+                        ]
+                        await client.send_message(job["user_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
 
-                        await db.update_forward_job(job_id, {"success": job["success"] + 1, "current_id": msg_id + 1})
+                        # Exit the loop for this job until user provides input
+                        # Break instead of return to keep the worker task alive
+                        break
 
                     except errors.FloodWait as e:
                         await asyncio.sleep(e.value + 1)
-                        # Retry once
-                        await worker_client.copy_message(job["target_chat"], job["source_chat"], msg_id, reply_markup=reply_markup or msg.reply_markup)
-                        await db.update_forward_job(job_id, {"success": job["success"] + 1, "current_id": msg_id + 1})
+                        # retry logic handled by loop
                     except Exception as e:
-                        logger.warning(f"Failed to forward {msg_id}: {e}")
+                        logger.warning(f"Failed to process {msg_id}: {e}")
                         await db.update_forward_job(job_id, {"failed": job["failed"] + 1, "current_id": msg_id + 1})
 
-                    await asyncio.sleep(0.5) # Speed control
+                    await asyncio.sleep(0.5)
 
-                if job["current_id"] > job["end_id"]:
+                # Re-fetch job to check if it's actually finished
+                job = await db.get_forward_job(job_id)
+                if job and job["status"] == "running" and job["current_id"] > job["end_id"]:
                     await db.update_forward_job(job_id, {"status": "completed"})
+                    await client.send_message(job["user_id"], "✅ **Forwarding Job Completed!**")
 
-            finally:
-                if session_string:
-                    await worker_client.stop()
+            except Exception as e:
+                logger.error(f"Error in forward loop: {e}")
 
         except Exception as e:
             logger.error(f"Worker error on job {job_id}: {e}")
@@ -240,5 +468,6 @@ async def init_forward_worker(client):
              await forward_queue.put(job["job_id"])
              logger.info(f"Resumed forward job {job['job_id']}")
 
-    for _ in range(2): # Process 2 jobs concurrently
+    asyncio.create_task(cleanup_user_clients())
+    for _ in range(2):
         asyncio.create_task(forward_worker(client))
