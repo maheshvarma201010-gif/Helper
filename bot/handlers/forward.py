@@ -134,6 +134,9 @@ async def handle_forward_input(client, message):
                 row.append(InlineKeyboardButton(btn["name"], url=btn["url"]))
             buttons.append(row)
         user_client = await get_user_client(user_id)
+        if not user_client:
+            return await message.reply_text("❌ Failed to start your session client. Please check your /ss string.")
+
         bot_me = await client.get_me()
         try:
             await user_client.copy_message(target_id, bot_me.id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
@@ -200,6 +203,9 @@ async def handle_forward_input(client, message):
             buttons.append(row)
 
         user_client = await get_user_client(user_id)
+        if not user_client:
+            return await message.reply_text("❌ Failed to start your session client. Please check your /ss string.")
+
         bot_me = await client.get_me()
         try:
             await user_client.copy_message(target_id, bot_me.id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
@@ -229,6 +235,9 @@ async def fwd_mode_callback(client, callback_query):
 async def handle_dm_media(client, message):
     user_id = message.from_user.id
     if await db.get_user_state(user_id): return
+
+    if not await db.get_session(user_id):
+        return await message.reply_text("❌ Please save your string session first using /ss before using interactive forwarding.")
 
     is_forwarded = bool(message.forward_from or message.forward_from_chat or message.forward_sender_name)
     status_text = "🔄 **Forwarded Post Detected**" if is_forwarded else "📝 **New Post Detected**"
