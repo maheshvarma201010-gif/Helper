@@ -247,4 +247,19 @@ class Database:
         data = await self.auto_approve.find_one({"chat_id": chat_id})
         return data["active"] if data else False
 
+    async def reset_user(self, user_id):
+        """Resets user state and temporary data to prevent state collision."""
+        await self.update_user_state(user_id, None)
+        await self.users.update_one(
+            {"user_id": user_id},
+            {"$unset": {
+                "temp_btn_wiz": "",
+                "temp_dm_links": "",
+                "temp_manual": "",
+                "temp_replace": ""
+            }}
+        )
+        # Also clear temporary job data if any
+        await self.replace_jobs.delete_one({"user_id": user_id})
+
 db = Database()

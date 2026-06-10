@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 
 @Client.on_message(filters.command("replace_domain") & filters.user(Config.OWNER_ID))
 async def replace_domain_command(client, message):
+    user_id = message.from_user.id
+    await db.reset_user(user_id)
+
     if await db.is_domain_job_running():
         return await message.reply_text("❌ A domain replacement task is already running. Use /cancel_replace to stop it.")
 
-    user_id = message.from_user.id
     await db.clear_domain_data(user_id)
     await db.update_user_state(user_id, "awaiting_domain_first_link")
     await message.reply_text("🔗 **Send FIRST Message Link:**")

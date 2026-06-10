@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 @Client.on_message(filters.command("auto") & filters.private)
 async def auto_command(client, message):
     user_id = message.from_user.id
+    await db.reset_user(user_id)
     await db.update_user_state(user_id, "awaiting_button_count")
     await message.reply_text("🔢 **Auto Buttons Setup**\n\nHow many buttons do you want to add? (Enter a number)")
 

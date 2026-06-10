@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 @Client.on_message(filters.command("replace") & filters.private)
 async def replace_command(client, message):
     user_id = message.from_user.id
-    await db.clear_replace_data(user_id)
+    await db.reset_user(user_id)
     await db.update_user_state(user_id, "awaiting_replace_first_link")
     await message.reply_text("Send FIRST message link.")
 

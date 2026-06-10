@@ -102,6 +102,7 @@ async def handle_job_callbacks(client, callback_query):
 @Client.on_message(filters.command("tedit") & filters.private)
 async def tedit_command_router(client, message):
     user_id = message.from_user.id
+    await db.reset_user(user_id)
     settings = await db.get_tedit_settings(user_id)
 
     # If no arguments, show setup or settings menu

@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 @Client.on_message(filters.command("ss") & filters.private)
 async def ss_command(client, message):
     user_id = message.from_user.id
+    await db.reset_user(user_id)
 
     if len(message.command) > 1:
         # Case: /ss <string_session>
