@@ -61,7 +61,26 @@ async def forward_command(client, message):
     await db.update_user_state(user_id, "fwd_start_link")
     await message.reply_text("🔗 **Forwarding Setup**\n\nPlease send the **First Message Link**.")
 
-@Client.on_message(filters.private & filters.text & filters.create(lambda _, __, m: not m.text.startswith("/")), group=8)
+@Client.on_message(filters.command("cancel") & filters.private)
+async def cancel_command(client, message):
+    user_id = message.from_user.id
+    await db.update_user_state(user_id, None)
+    await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_btn_wiz": "", "temp_dm_links": "", "temp_manual": ""}})
+    await message.reply_text("✅ Current operation cancelled.")
+
+@Client.on_message(filters.command("stop") & filters.private)
+async def stop_command(client, message):
+    user_id = message.from_user.id
+    active_jobs = await db.forward_jobs.find({"user_id": user_id, "status": "running"}).to_list(length=None)
+    if not active_jobs:
+        return await message.reply_text("❌ No active forwarding jobs found.")
+
+    for job in active_jobs:
+        await db.update_forward_job(job["job_id"], {"status": "stopped"})
+
+    await message.reply_text(f"🛑 Stopped {len(active_jobs)} active job(s).")
+
+@Client.on_message(filters.private & filters.text, group=8)
 async def handle_forward_input(client, message, override_text=None):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
@@ -71,6 +90,15 @@ async def handle_forward_input(client, message, override_text=None):
         return
 
     text = override_text if override_text else message.text.strip()
+
+    if not override_text and text.startswith("/"):
+        if text in ["/cancel", "/stop"]:
+            return # Handled by specific command handlers
+        # Other commands might be intended to break state?
+        # But for now we only care about cancel/stop.
+        if state not in ["fwd_filter", "btn_wiz_count"]: # skip and last are valid in these states
+             message.continue_propagation()
+             return
 
     if state == "fwd_start_link":
         chat_id, first_id, _ = parse_message_link(text)
@@ -219,7 +247,7 @@ async def handle_forward_input(client, message, override_text=None):
         await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_manual": ""}})
 
     elif state.startswith("btn_wiz_count:"):
-        if text == "/last":
+        if text == "/last" or override_text == "/last":
             user_data = await db.get_user(user_id)
             last_cfg = user_data.get("last_btn_config")
             if not last_cfg: return await message.reply_text("❌ No last configuration found.")
@@ -231,6 +259,7 @@ async def handle_forward_input(client, message, override_text=None):
 
             wiz_data = (await db.get_user(user_id)).get("temp_btn_wiz", {})
             if wiz_data.get("is_forward"):
+                # Ensure state is updated BEFORE calling handle_forward_input
                 await db.update_user_state(user_id, "btn_wiz_rows")
                 return await handle_forward_input(client, message, override_text=str(last_cfg["rows"]))
             else:

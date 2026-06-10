@@ -113,6 +113,19 @@ class Bot(Client):
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
 
+        from pyrogram.types import BotCommand
+        await self.set_bot_commands([
+            BotCommand("start", "Start the bot"),
+            BotCommand("forward", "Cleanly copy messages between links"),
+            BotCommand("ss", "Save your string session"),
+            BotCommand("auto", "Configure default button templates"),
+            BotCommand("scrab", "Extract buttons from a post link"),
+            BotCommand("tedit", "Watermarking menu"),
+            BotCommand("stats", "Admin statistics"),
+            BotCommand("cancel", "Cancel current setup/wizard"),
+            BotCommand("stop", "Terminate active forwarding jobs")
+        ])
+
         # Ensure directories exist
         static_path = "bot/web/static"
         template_path = "bot/web/templates"
