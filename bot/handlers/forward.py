@@ -62,14 +62,15 @@ async def forward_command(client, message):
     await message.reply_text("🔗 **Forwarding Setup**\n\nPlease send the **First Message Link**.")
 
 @Client.on_message(filters.private & filters.text & filters.create(lambda _, __, m: not m.text.startswith("/")), group=8)
-async def handle_forward_input(client, message):
+async def handle_forward_input(client, message, override_text=None):
     user_id = message.from_user.id
     state = await db.get_user_state(user_id)
     if not state:
-        message.continue_propagation()
+        if not override_text:
+            message.continue_propagation()
         return
 
-    text = message.text.strip()
+    text = override_text if override_text else message.text.strip()
 
     if state == "fwd_start_link":
         chat_id, first_id, _ = parse_message_link(text)
@@ -216,6 +217,128 @@ async def handle_forward_input(client, message):
 
         await db.update_user_state(user_id, None)
         await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_manual": ""}})
+
+    elif state.startswith("btn_wiz_count:"):
+        if text == "/last":
+            user_data = await db.get_user(user_id)
+            last_cfg = user_data.get("last_btn_config")
+            if not last_cfg: return await message.reply_text("❌ No last configuration found.")
+
+            await db.users.update_one({"user_id": user_id}, {"$set": {
+                "temp_btn_wiz.btns": last_cfg["btns"],
+                "temp_btn_wiz.rows": last_cfg["rows"]
+            }})
+
+            wiz_data = (await db.get_user(user_id)).get("temp_btn_wiz", {})
+            if wiz_data.get("is_forward"):
+                await db.update_user_state(user_id, "btn_wiz_rows")
+                return await handle_forward_input(client, message, override_text=str(last_cfg["rows"]))
+            else:
+                await db.update_user_state(user_id, "btn_wiz_target")
+                return await message.reply_text("🎯 **Reusing last buttons.**\n\nSend **Target Destination** (ID/Username/Link).")
+
+        if not text.isdigit(): return await message.reply_text("❌ Please enter a number.")
+        count = int(text)
+        if count <= 0 or count > 50: return await message.reply_text("❌ Limit: 1 to 50 buttons.")
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_btn_wiz.count": count, "temp_btn_wiz.btns": []}})
+        await db.update_user_state(user_id, f"btn_wiz_data:0")
+        await message.reply_text(f"Button 1:\n✨480p | https://t.me/example")
+
+    elif state.startswith("btn_wiz_data:"):
+        index = int(state.split(":")[1])
+        if " | " not in text: return await message.reply_text("❌ Format: `Name | Link` (Example: `Google | https://google.com`) ")
+        name, url = [x.strip() for x in text.split(" | ", 1)]
+
+        # Robust URL validation
+        import re
+        url_pattern = re.compile(r"^https?://[^\s/$.?#].[^\s]*$")
+        if not url_pattern.match(url):
+             return await message.reply_text("❌ Invalid URL format. Must start with http:// or https://")
+
+        user_data = await db.get_user(user_id)
+        wiz_data = user_data.get("temp_btn_wiz", {})
+        wiz_data["btns"].append({"name": name, "url": url})
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_btn_wiz": wiz_data}})
+
+        if index + 1 < wiz_data["count"]:
+            await db.update_user_state(user_id, f"btn_wiz_data:{index + 1}")
+            await message.reply_text(f"Button {index + 2}:\n✨720p | https://t.me/example")
+        else:
+            await db.update_user_state(user_id, "btn_wiz_rows")
+            await message.reply_text("🔢 **How many buttons per row?**")
+
+    elif state == "btn_wiz_rows":
+        if not text.isdigit(): return await message.reply_text("❌ Enter a number.")
+        rows = int(text)
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_btn_wiz.rows": rows}})
+
+        user_data = await db.get_user(user_id)
+        wiz_data = user_data.get("temp_btn_wiz", {})
+
+        if wiz_data.get("is_forward"):
+            # Save configuration for future use
+            await db.users.update_one({"user_id": user_id}, {"$set": {"last_btn_config": {"btns": wiz_data["btns"], "rows": rows}}})
+
+            # Execute Edit in Place
+            user_client = await get_user_client(user_id)
+            if not user_client: return await message.reply_text("❌ Session failed.")
+
+            buttons = []
+            btns = wiz_data["btns"]
+            for i in range(0, len(btns), rows):
+                row = [InlineKeyboardButton(b["name"], url=b["url"]) for b in btns[i:i+rows]]
+                buttons.append(row)
+
+            try:
+                # We need the chat_id and msg_id of the original forwarded message in the channel
+                chat_id, msg_id = wiz_data["chat_id"], wiz_data["msg_id"]
+                if not chat_id or not msg_id:
+                     return await message.reply_text("❌ Could not identify original message for editing. Ensure the message was forwarded from a channel.")
+
+                await user_client.edit_message_reply_markup(chat_id, msg_id, reply_markup=InlineKeyboardMarkup(buttons))
+                await message.reply_text("✅ Buttons attached to the original post!")
+            except Exception as e:
+                logger.error(f"Edit in place failed: {e}")
+                await message.reply_text(f"❌ Edit failed: `{e}`")
+
+            await db.update_user_state(user_id, None)
+            await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_btn_wiz": ""}})
+        else:
+            await db.update_user_state(user_id, "btn_wiz_target")
+            await message.reply_text("🎯 **Target Destination**\nEnter: Channel ID, Username, or Group ID.")
+
+    elif state == "btn_wiz_target":
+        try:
+            target_chat = await resolve_chat(client, text)
+            target_id = target_chat.id
+        except Exception as e: return await message.reply_text(f"❌ Error: {e}")
+
+        user_data = await db.get_user(user_id)
+        wiz_data = user_data.get("temp_btn_wiz", {})
+        btns = wiz_data["btns"]
+        rows = wiz_data["rows"]
+        orig_msg_id = wiz_data["orig_msg_id"]
+
+        buttons = []
+        for i in range(0, len(btns), rows):
+            row = [InlineKeyboardButton(b["name"], url=b["url"]) for b in btns[i:i+rows]]
+            buttons.append(row)
+
+        # Save configuration for future use
+        await db.users.update_one({"user_id": user_id}, {"$set": {"last_btn_config": {"btns": btns, "rows": rows}}})
+
+        user_client = await get_user_client(user_id)
+        bot_me = await client.get_me()
+        try:
+            # Clean copy to target with new markup
+            await user_client.copy_message(target_id, bot_me.id, orig_msg_id, reply_markup=InlineKeyboardMarkup(buttons))
+            await message.reply_text("✅ Post sent to target with buttons!")
+        except Exception as e:
+            logger.error(f"Wiz forward failed: {e}")
+            await message.reply_text(f"❌ Failed: {e}")
+
+        await db.update_user_state(user_id, None)
+        await db.users.update_one({"user_id": user_id}, {"$unset": {"temp_btn_wiz": ""}})
     else:
         message.continue_propagation()
 
@@ -231,7 +354,7 @@ async def fwd_mode_callback(client, callback_query):
     buttons = [[InlineKeyboardButton("🚀 Start", callback_data=f"start_fwd:{job_id}")]]
     await callback_query.message.edit_text(summary, reply_markup=InlineKeyboardMarkup(buttons))
 
-@Client.on_message(filters.private & (filters.photo | filters.video | filters.document | filters.animation | filters.audio | filters.voice | filters.sticker), group=9)
+@Client.on_message(filters.private & (filters.photo | filters.video | filters.document | filters.animation | filters.audio | filters.voice | filters.sticker | filters.text) & ~filters.command(["start", "forward", "ss", "auto", "scrab", "stats", "tedit"]), group=9)
 async def handle_dm_media(client, message):
     user_id = message.from_user.id
     if await db.get_user_state(user_id): return
@@ -239,12 +362,41 @@ async def handle_dm_media(client, message):
     if not await db.get_session(user_id):
         return await message.reply_text("❌ Please save your string session first using /ss before using interactive forwarding.")
 
+    # Check for Forward Tag
     is_forwarded = bool(message.forward_from or message.forward_from_chat or message.forward_sender_name)
-    status_text = "🔄 **Forwarded Post Detected**" if is_forwarded else "📝 **New Post Detected**"
 
-    buttons = [[InlineKeyboardButton("🤖 Auto", callback_data=f"dm_btn:auto:{message.id}"),
-                InlineKeyboardButton("🛠 Manual", callback_data=f"dm_btn:manual:{message.id}")]]
-    await message.reply_text(f"{status_text}\n\nChoose your button configuration mode:", reply_markup=InlineKeyboardMarkup(buttons))
+    if is_forwarded:
+        # Check if the forward is from a chat the bot/user can edit (for "Edit in Place")
+        # We'll save the forward info to allow the wizard to finalize the action later
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_btn_wiz": {
+            "is_forward": True,
+            "chat_id": message.forward_from_chat.id if message.forward_from_chat else None,
+            "msg_id": message.forward_from_message_id if message.forward_from_chat else None,
+            "orig_msg_id": message.id
+        }}})
+        await db.update_user_state(user_id, f"btn_wiz_count:{message.id}")
+
+        user_data = await db.get_user(user_id)
+        last_cfg = user_data.get("last_btn_config")
+        suffix = ""
+        if last_cfg:
+             suffix = f"\n\n(Last configuration: {len(last_cfg['btns'])} buttons, {last_cfg['rows']} per row. Use /last to quickly reuse.)"
+
+        await message.reply_text(f"🔢 **Forwarded Post Detected**\n\nHow many buttons do you want to add?{suffix}")
+    else:
+        await db.users.update_one({"user_id": user_id}, {"$set": {"temp_btn_wiz": {
+            "is_forward": False,
+            "orig_msg_id": message.id
+        }}})
+        await db.update_user_state(user_id, f"btn_wiz_count:{message.id}")
+
+        user_data = await db.get_user(user_id)
+        last_cfg = user_data.get("last_btn_config")
+        suffix = ""
+        if last_cfg:
+             suffix = f"\n\n(Last configuration: {len(last_cfg['btns'])} buttons, {last_cfg['rows']} per row. Use /last to quickly reuse.)"
+
+        await message.reply_text(f"📝 **New Post Detected**\n\nHow many buttons do you want to add?{suffix}")
 
 @Client.on_callback_query(filters.regex(r"^dm_btn:(.+):(.+)"))
 async def dm_btn_callback(client, callback_query):

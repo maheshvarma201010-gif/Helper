@@ -35,14 +35,20 @@ async def scrab_command(client, message):
         if not msg.reply_markup or not msg.reply_markup.inline_keyboard:
             return await message.reply_text("❌ This message has no attached buttons.")
 
-        button_names = []
+        extracted = []
         for row in msg.reply_markup.inline_keyboard:
             for btn in row:
-                button_names.append(btn.text)
+                if btn.url:
+                    extracted.append(f"{btn.text} | {btn.url}")
+                else:
+                    extracted.append(f"{btn.text} (No URL)")
 
-        response = "✅ **Extracted Button Names:**\n\n"
-        for i, name in enumerate(button_names, 1):
-            response += f"{i}. `{name}`\n"
+        if not extracted:
+            return await message.reply_text("❌ No URL buttons found.")
+
+        response = "✅ **Extracted Buttons:**\n\n"
+        response += "\n".join([f"`{item}`" for item in extracted])
+        response += "\n\n**Total:** " + str(len(extracted))
 
         await message.reply_text(response)
 
