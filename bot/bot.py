@@ -107,7 +107,7 @@ class Bot(Client):
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN,
             plugins=dict(
-                root="bot/handlers",
+                root="bot.handlers",
                 include=[
                     "admin", "auto_approve", "auto_buttons", "auto_font", "font",
                     "forward", "redirect", "replace", "replace_domain",

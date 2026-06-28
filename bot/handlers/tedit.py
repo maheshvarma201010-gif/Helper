@@ -308,7 +308,10 @@ async def handle_menu_callbacks(client, callback_query):
             try:
                 chat = await client.get_chat(m["channel_id"])
                 title = chat.title
-            except: title = f"Channel {m['channel_id']}"
+        except errors.PeerIdInvalid:
+            title = f"Invalid Peer ({m['channel_id']})"
+        except:
+            title = f"Channel {m['channel_id']}"
             buttons.append([InlineKeyboardButton(f"⚙️ {title}", callback_data=f"tedit_ch_menu:{m['channel_id']}")])
 
         buttons.append([InlineKeyboardButton("➕ Add New Channel", callback_data="tedit_menu:add_channel")])
@@ -661,8 +664,12 @@ async def tedit_worker(client):
             else:
                 await process_single_job(client, job)
 
+        except errors.PeerIdInvalid as e:
+            logger.error(f"Peer ID invalid for job {job_id}: {e}")
+            await db.update_tedit_job(job_id, {"status": "failed", "error": str(e)})
         except Exception as e:
             logger.error(f"Worker error on job {job_id}: {e}")
+            await db.update_tedit_job(job_id, {"status": "failed", "error": str(e)})
         finally:
             tedit_queue.task_done()
 
