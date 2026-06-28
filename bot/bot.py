@@ -107,9 +107,28 @@ class Bot(Client):
             bot_token=Config.BOT_TOKEN,
             plugins=dict(root="bot/handlers")
         )
+        self.admin_userbot = None
 
     async def start(self):
         await super().start()
+
+        # Load additional plugins from /plugins directory
+        try:
+            from pyrogram.methods.utilities.idle import idle
+            # We don't want to idle here, just load plugins
+            # Pyrogram loads plugins from 'root' during start.
+            # To load from another directory, we can use a small hack or just manually import.
+            # Given the constraints, let's manually load them.
+            import glob
+            import importlib
+            plugin_files = glob.glob("plugins/*.py")
+            for f in plugin_files:
+                name = f.replace("/", ".").replace(".py", "")
+                importlib.import_module(name)
+                logger.info(f"Loaded plugin: {name}")
+        except Exception as e:
+            logger.error(f"Error loading extra plugins: {e}")
+
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
 
@@ -117,6 +136,9 @@ class Bot(Client):
         await self.set_bot_commands([
             BotCommand("start", "Start the bot"),
             BotCommand("forward", "Cleanly copy messages between links"),
+            BotCommand("login", "Admin Login for Professional Forward"),
+            BotCommand("logout", "Admin Logout"),
+            BotCommand("forwardstop", "Stop Professional Forward Jobs"),
             BotCommand("ss", "Save your string session"),
             BotCommand("auto", "Configure default button templates"),
             BotCommand("scrab", "Extract buttons from a post link"),
@@ -125,6 +147,16 @@ class Bot(Client):
             BotCommand("cancel", "Cancel current setup/wizard"),
             BotCommand("stop", "Terminate active forwarding jobs")
         ])
+
+        # Initialize Admin Userbot
+        await self.init_admin_userbot()
+
+        # Resume Professional Forwarding Tasks
+        try:
+            from plugins.forward import init_prof_worker
+            await init_prof_worker(self)
+        except Exception as e:
+            logger.error(f"Error resuming professional workers: {e}")
 
         # Ensure directories exist
         static_path = "bot/web/static"
@@ -158,6 +190,39 @@ class Bot(Client):
         # Start Forward Worker
         from bot.handlers.forward import init_forward_worker
         await init_forward_worker(self)
+
+    async def init_admin_userbot(self):
+        """Initializes the admin userbot client if a session is saved."""
+        session_string = await db.get_admin_session()
+        if not session_string:
+            logger.info("No admin session found. Professional forwarding disabled until /login.")
+            return
+
+        if self.admin_userbot:
+            try: await self.admin_userbot.stop()
+            except: pass
+
+        try:
+            self.admin_userbot = Client(
+                "admin_userbot",
+                api_id=Config.API_ID,
+                api_hash=Config.API_HASH,
+                session_string=session_string,
+                in_memory=True
+            )
+            await self.admin_userbot.start()
+
+            # Verify session
+            admin_me = await self.admin_userbot.get_me()
+            logger.info(f"Admin Userbot initialized as {admin_me.first_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize admin userbot: {e}")
+            await db.delete_admin_session()
+            self.admin_userbot = None
+            # Notify admin if possible (assuming OWNER_ID is valid)
+            if Config.OWNER_ID:
+                try: await self.send_message(Config.OWNER_ID, f"⚠️ Admin Session Invalid: {e}\nPlease /login again.")
+                except: pass
 
     async def cache_peers(self):
         """

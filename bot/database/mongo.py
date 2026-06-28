@@ -12,7 +12,9 @@ class Database:
         self.replace_jobs = self.db["replace_jobs"]
         self.domain_jobs = self.db["domain_jobs"]
         self.forward_jobs = self.db["forward_jobs"]
+        self.prof_forward_jobs = self.db["prof_forward_jobs"]
         self.button_configs = self.db["button_configs"]
+        self.admin_sessions = self.db["admin_sessions"]
 
         # New collections for Userbot and Search
         self.settings = self.db["settings"]
@@ -48,6 +50,17 @@ class Database:
         data = await self.sessions.find_one({"user_id": user_id})
         return data["session"] if data else None
 
+    # Admin Sessions
+    async def set_admin_session(self, session_string):
+        await self.admin_sessions.update_one({"key": "admin_session"}, {"$set": {"session": session_string}}, upsert=True)
+
+    async def get_admin_session(self):
+        data = await self.admin_sessions.find_one({"key": "admin_session"})
+        return data["session"] if data else None
+
+    async def delete_admin_session(self):
+        await self.admin_sessions.delete_one({"key": "admin_session"})
+
     # Button Configurations
     async def set_button_config(self, user_id, config):
         await self.button_configs.update_one({"user_id": user_id}, {"$set": config}, upsert=True)
@@ -75,6 +88,19 @@ class Database:
 
     async def get_all_active_forward_jobs(self):
         return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued", "waiting_input"]}}).to_list(length=None)
+
+    # Professional Forward Jobs
+    async def add_prof_forward_job(self, job_data):
+        await self.prof_forward_jobs.insert_one(job_data)
+
+    async def update_prof_forward_job(self, job_id, update_data):
+        await self.prof_forward_jobs.update_one({"job_id": job_id}, {"$set": update_data})
+
+    async def get_prof_forward_job(self, job_id):
+        return await self.prof_forward_jobs.find_one({"job_id": job_id})
+
+    async def get_all_active_prof_forward_jobs(self):
+        return await self.prof_forward_jobs.find({"status": "running"}).to_list(length=None)
 
     async def append_to_forward_queue(self, job_id, message_id):
         await self.forward_jobs.update_one({"job_id": job_id}, {"$push": {"message_queue": message_id}})
@@ -256,7 +282,9 @@ class Database:
                 "temp_btn_wiz": "",
                 "temp_dm_links": "",
                 "temp_manual": "",
-                "temp_replace": ""
+                "temp_replace": "",
+                "prof_fwd_data": "",
+                "prof_login_data": ""
             }}
         )
         # Also clear temporary job data if any
