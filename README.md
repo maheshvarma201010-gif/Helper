@@ -9,11 +9,12 @@ A dedicated, high-performance module for large-scale content migration and manag
 - **Admin Authentication (`/login`):** Secure login using your own Telegram account. Supports OTP and Two-Step Verification (2FA).
 - **Session Persistence:** Login once; the session is saved securely in MongoDB and survives restarts, VPS reboots, and redeployments.
 - **Range Forwarding (`/forward`):** Seamlessly copy thousands of messages between any two links with no forward attribution. **Fast and efficient.**
-- **Advanced Filter Selection:** Before starting, choose exactly what to forward:
-  - Media: Photos, Videos, Documents, Audio, Voice, Animations, Stickers, Video Notes.
+- **Advanced Filter Selection:** Before starting, choose exactly what to forward via a toggleable inline grid:
+  - Media: Photos, Videos, Documents, Files, Audio, Voice, Animations, Stickers, Video Notes.
   - Content: Text Messages, Links (URLs), Polls, Locations, Contacts.
   - Structure: Albums (Media Groups).
-- **Media Group Excellence:** Native handling of albums, ensuring they are posted as a single unit without duplicates.
+  - Presets: "Select All", "Clear All", "All Media".
+- **Media Group Excellence:** Native handling of albums, ensuring they are posted as a single unit without duplicates or quality loss.
 - **Smart Resumption:** Automatically resumes active forwarding jobs if the bot or server restarts.
 - **Live Progress Tracking:** Real-time metrics including completion percentage, success/fail/skip counts, speed (msg/s), and ETA.
 - **Control Management (`/forwardstop`):** Safely terminate active professional forwarding tasks at any time.

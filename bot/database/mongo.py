@@ -283,8 +283,8 @@ class Database:
                 "temp_dm_links": "",
                 "temp_manual": "",
                 "temp_replace": "",
-                "prof_fwd_data": "",
-                "prof_login_data": ""
+                "prof_fwd_data": {},
+                "prof_login_data": {}
             }}
         )
         # Also clear temporary job data if any

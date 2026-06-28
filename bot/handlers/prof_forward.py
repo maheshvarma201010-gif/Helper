@@ -126,21 +126,25 @@ async def handle_prof_fwd_input(client, message):
             logger.error(f"Target resolution error: {e}")
             return await message.reply_text(f"❌ Could not resolve target or insufficient permissions: {e}")
 
-FILTER_TYPES = {
-    "files": "📁 Files", "videos": "🎥 Videos", "photos": "🖼 Photos",
-    "audio": "🎵 Audio", "voice": "🎤 Voice", "animations": "🎬 Animations",
-    "video_notes": "🎥 Video Notes", "stickers": "😀 Stickers", "text": "📝 Text Messages",
-    "links": "🔗 Links", "polls": "📊 Polls", "locations": "📍 Locations",
-    "contacts": "👤 Contacts", "documents": "📦 Documents", "albums": "📚 Albums"
-}
+FILTER_TYPES = [
+    ("files", "📁 Files"), ("videos", "🎥 Videos"),
+    ("photos", "🖼 Photos"), ("audio", "🎵 Audio"),
+    ("voice", "🎤 Voice"), ("animations", "🎬 Animations"),
+    ("video_notes", "🎥 Video Notes"), ("stickers", "😀 Stickers"),
+    ("text", "📝 Text Messages"), ("links", "🔗 Links"),
+    ("polls", "📊 Polls"), ("locations", "📍 Locations"),
+    ("contacts", "👤 Contacts"), ("documents", "📦 Documents"),
+    ("albums", "📚 Albums"), ("all_media", "🌐 All Media")
+]
 
 def get_filter_markup(selected_filters):
     buttons = []
-    keys = list(FILTER_TYPES.keys())
-    for i in range(0, len(keys), 2):
+    # Grid of 2 columns as requested
+    for i in range(0, len(FILTER_TYPES), 2):
         row = []
-        for key in keys[i:i+2]:
-            text = f"✅ {FILTER_TYPES[key]}" if key in selected_filters else FILTER_TYPES[key]
+        for key, label in FILTER_TYPES[i:i+2]:
+            # Toggle state visual: ✅ Prefix for the label if selected
+            text = f"✅ {label.split(' ', 1)[1]}" if key in selected_filters else label
             row.append(InlineKeyboardButton(text, callback_data=f"prof_fwd_filter:toggle:{key}"))
         buttons.append(row)
 
@@ -166,7 +170,7 @@ async def prof_fwd_filter_callback(client, callback_query):
         if key in selected: selected.remove(key)
         else: selected.append(key)
     elif action == "all":
-        selected = list(FILTER_TYPES.keys())
+        selected = [f[0] for f in FILTER_TYPES]
     elif action == "clear":
         selected = []
     elif action == "done":
@@ -227,46 +231,11 @@ async def init_prof_worker(client):
             except: pass
 
 def is_allowed_type(msg, filters):
-    if not msg: return False
+    if not msg or msg.empty: return False
 
-    # Photos
-    if "photos" in filters and msg.photo: return True
-
-    # Videos
-    if "videos" in filters and msg.video: return True
-
-    # Files / Documents
-    if "files" in filters and msg.document: return True
-    if "documents" in filters and msg.document: return True
-
-    # Audio / Voice
-    if "audio" in filters and msg.audio: return True
-    if "voice" in filters and msg.voice: return True
-
-    # Animations / GIF
-    if "animations" in filters and msg.animation: return True
-
-    # Video Notes
-    if "video_notes" in filters and msg.video_note: return True
-
-    # Stickers
-    if "stickers" in filters and msg.sticker: return True
-
-    # Polls
-    if "polls" in filters and msg.poll: return True
-
-    # Locations
-    if "locations" in filters and msg.location: return True
-
-    # Contacts
-    if "contacts" in filters and msg.contact: return True
-
-    # Albums
-    if "albums" in filters and msg.media_group_id: return True
-
-    # Text Messages (Strictly plain text)
-    if "text" in filters and msg.text and not msg.entities:
-        # Check if it has URLs - if so, it might belong to 'links'
+    if "all_media" in filters:
+        # User requested: If All Media is selected, forward every supported message type.
+        # But we still check if it has some content we can forward.
         return True
 
     # Links (Contains URLs or Text Links)
@@ -277,8 +246,42 @@ def is_allowed_type(msg, filters):
                 if entity.type in [enums.MessageEntityType.URL, enums.MessageEntityType.TEXT_LINK]:
                     return True
 
-    # Broad 'text' check
-    if "text" in filters and msg.text: return True
+    # Photos
+    if "photos" in filters and msg.photo: return True
+    # Videos
+    if "videos" in filters and msg.video: return True
+    # Files / Documents
+    if ("files" in filters or "documents" in filters) and msg.document: return True
+    # Audio
+    if "audio" in filters and msg.audio: return True
+    # Voice
+    if "voice" in filters and msg.voice: return True
+    # Animations
+    if "animations" in filters and msg.animation: return True
+    # Video Notes
+    if "video_notes" in filters and msg.video_note: return True
+    # Stickers
+    if "stickers" in filters and msg.sticker: return True
+    # Polls
+    if "polls" in filters and msg.poll: return True
+    # Locations
+    if "locations" in filters and msg.location: return True
+    # Contacts
+    if "contacts" in filters and msg.contact: return True
+    # Albums
+    if "albums" in filters and msg.media_group_id: return True
+
+    # Text Messages (Plain text messages - no links if Links filter exists)
+    if "text" in filters and msg.text:
+        has_links = False
+        entities = msg.entities or msg.caption_entities
+        if entities:
+            for entity in entities:
+                if entity.type in [enums.MessageEntityType.URL, enums.MessageEntityType.TEXT_LINK]:
+                    has_links = True
+                    break
+        if not has_links:
+            return True
 
     return False
 
@@ -330,29 +333,46 @@ async def prof_forward_worker(client, job_id, status_msg):
                     else:
                         if msg.media_group_id:
                             if msg.media_group_id in processed_media_groups:
-                                job["skipped"] += 1
+                                # Already handled this album
+                                continue
                             else:
                                 try:
                                     # Fetch full media group
                                     group_msgs = await userbot.get_media_group(source, msg.id)
-                                    # Copy the whole group (Pyrogram doesn't have copy_media_group, use custom logic or copy one by one)
-                                    # Correct way to 're-send' a media group as if new:
-                                    media = []
-                                    for m in group_msgs:
-                                        if m.photo: media.append(InputMediaPhoto(m.photo.file_id, caption=m.caption, caption_entities=m.caption_entities))
-                                        elif m.video: media.append(InputMediaVideo(m.video.file_id, caption=m.caption, caption_entities=m.caption_entities))
-                                        elif m.audio: media.append(InputMediaAudio(m.audio.file_id, caption=m.caption, caption_entities=m.caption_entities))
-                                        elif m.document: media.append(InputMediaDocument(m.document.file_id, caption=m.caption, caption_entities=m.caption_entities))
 
-                                    if media:
+                                    # Filter items within the group
+                                    media = []
+                                    count_valid = 0
+                                    for m in group_msgs:
+                                        if is_allowed_type(m, filters_list) and job["start_id"] <= m.id <= job["end_id"]:
+                                            count_valid += 1
+                                            if m.photo: media.append(InputMediaPhoto(m.photo.file_id, caption=m.caption, caption_entities=m.caption_entities))
+                                            elif m.video: media.append(InputMediaVideo(m.video.file_id, caption=m.caption, caption_entities=m.caption_entities))
+                                            elif m.audio: media.append(InputMediaAudio(m.audio.file_id, caption=m.caption, caption_entities=m.caption_entities))
+                                            elif m.document: media.append(InputMediaDocument(m.document.file_id, caption=m.caption, caption_entities=m.caption_entities))
+
+                                    if len(media) > 1:
                                         await userbot.send_media_group(target, media)
+                                        job["success"] += count_valid
+                                    elif len(media) == 1:
+                                        # Find the single valid message and copy it
+                                        for m in group_msgs:
+                                            if is_allowed_type(m, filters_list) and job["start_id"] <= m.id <= job["end_id"]:
+                                                await userbot.copy_message(target, source, m.id)
+                                                job["success"] += 1
+                                                break
+                                    else:
+                                        # No valid items in the group (within range/filters)
+                                        # We don't increment skipped here because the individual IDs will be skipped in the batch loop
+                                        # except the first one which we just saw.
+                                        job["skipped"] += 1
 
                                     processed_media_groups.add(msg.media_group_id)
-                                    job["success"] += len(group_msgs)
                                 except Exception as me:
                                     logger.error(f"Media group error: {me}")
                                     await userbot.copy_message(target, source, msg.id)
                                     job["success"] += 1
+                                    processed_media_groups.add(msg.media_group_id)
                         else:
                             await userbot.copy_message(target, source, msg.id)
                             job["success"] += 1
