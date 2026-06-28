@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from pyrogram import Client, filters, errors
 from bot.config import Config
 from bot.database.mongo import db
@@ -38,6 +37,8 @@ async def handle_login_input(client, message):
     text = message.text.strip() if message.text else None
     if not text:
         return
+
+    message.stop_propagation()
 
     if text == "/cancel":
         if user_id in login_clients:
@@ -148,6 +149,3 @@ async def handle_login_input(client, message):
         except Exception as e:
             logger.error(f"2FA Error: {e}")
             await message.reply_text(f"❌ Error: {e}")
-
-    # Don't continue propagation if we handled the state
-    return

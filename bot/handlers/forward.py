@@ -281,7 +281,7 @@ async def fwd_mode_callback(client, callback_query):
     buttons = [[InlineKeyboardButton("🚀 Start", callback_data=f"start_fwd:{job_id}")]]
     await callback_query.message.edit_text(summary, reply_markup=InlineKeyboardMarkup(buttons))
 
-@Client.on_message(filters.private & (filters.photo | filters.video | filters.document | filters.animation | filters.audio | filters.voice | filters.sticker | filters.text) & ~filters.command(["start", "forward", "ss", "auto", "scrab", "stats", "tedit", "cancel", "stop"]), group=9)
+@Client.on_message(filters.private & (filters.photo | filters.video | filters.document | filters.animation | filters.audio | filters.voice | filters.sticker | filters.text) & ~filters.command(["start", "forward", "ss", "auto", "scrab", "stats", "tedit", "cancel", "stop", "login", "logout", "forwardstop"]), group=9)
 async def handle_dm_media(client, message):
     user_id = message.from_user.id
     if await db.get_user_state(user_id): return

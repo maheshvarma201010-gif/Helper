@@ -16,6 +16,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Pre-load plugins from root 'plugins' directory to ensure handlers are registered correctly
+import glob
+import importlib
+try:
+    plugin_files = glob.glob("plugins/*.py")
+    for f in plugin_files:
+        name = f.replace("/", ".").replace(".py", "")
+        if name != "plugins.__init__":
+            importlib.import_module(name)
+            logger.info(f"Pre-loaded plugin: {name}")
+except Exception as e:
+    logger.error(f"Error pre-loading extra plugins: {e}")
+
 async def health_check(request):
     active_jobs = await db.get_all_active_tedit_jobs()
     status = {
@@ -111,23 +124,6 @@ class Bot(Client):
 
     async def start(self):
         await super().start()
-
-        # Load additional plugins from /plugins directory
-        try:
-            from pyrogram.methods.utilities.idle import idle
-            # We don't want to idle here, just load plugins
-            # Pyrogram loads plugins from 'root' during start.
-            # To load from another directory, we can use a small hack or just manually import.
-            # Given the constraints, let's manually load them.
-            import glob
-            import importlib
-            plugin_files = glob.glob("plugins/*.py")
-            for f in plugin_files:
-                name = f.replace("/", ".").replace(".py", "")
-                importlib.import_module(name)
-                logger.info(f"Loaded plugin: {name}")
-        except Exception as e:
-            logger.error(f"Error loading extra plugins: {e}")
 
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")

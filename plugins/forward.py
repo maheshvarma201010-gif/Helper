@@ -62,6 +62,8 @@ async def handle_prof_fwd_input(client, message):
     if not text:
         return
 
+    message.stop_propagation()
+
     if text == "/cancel":
         await db.reset_user(user_id)
         return await message.reply_text("✅ Operation cancelled.")
@@ -195,11 +197,13 @@ async def prof_forward_worker(client, job_id, status_msg):
                             messages = await userbot.get_media_group(source, curr_id)
                             # Copy the whole group
                             await userbot.copy_media_group(target, source, curr_id)
+
                             processed_media_groups.add(msg.media_group_id)
 
+                            # Increment success by the number of messages in the group
                             count = len(messages)
                             job["success"] += count
-                            # We increment by 1 and rely on processed_media_groups for the rest of the IDs in the range
+
                             curr_id += 1
                         except Exception as me:
                             logger.error(f"Media group error: {me}")
