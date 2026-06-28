@@ -308,10 +308,10 @@ async def handle_menu_callbacks(client, callback_query):
             try:
                 chat = await client.get_chat(m["channel_id"])
                 title = chat.title
-        except errors.PeerIdInvalid:
-            title = f"Invalid Peer ({m['channel_id']})"
-        except:
-            title = f"Channel {m['channel_id']}"
+            except errors.PeerIdInvalid:
+                title = f"Invalid Peer ({m['channel_id']})"
+            except:
+                title = f"Channel {m['channel_id']}"
             buttons.append([InlineKeyboardButton(f"⚙️ {title}", callback_data=f"tedit_ch_menu:{m['channel_id']}")])
 
         buttons.append([InlineKeyboardButton("➕ Add New Channel", callback_data="tedit_menu:add_channel")])
