@@ -8,11 +8,11 @@ A production-grade Telegram bot architected for high-performance message forward
 A dedicated, high-performance module for large-scale content migration and management.
 - **Admin Authentication (`/login`):** Secure login using your own Telegram account. Supports OTP and Two-Step Verification (2FA).
 - **Session Persistence:** Login once; the session is saved securely in MongoDB and survives restarts, VPS reboots, and redeployments.
-- **Range Forwarding (`/forward`):** Seamlessly copy thousands of messages between any two links with no forward attribution.
+- **Range Forwarding (`/forward`):** Seamlessly copy thousands of messages between any two links with no forward attribution. **Fast and efficient.**
 - **Media Group Excellence:** Native handling of albums, ensuring they are posted as a single unit without duplicates.
 - **Smart Resumption:** Automatically resumes active forwarding jobs if the bot or server restarts.
 - **Live Progress Tracking:** Real-time metrics including completion percentage, success/fail counts, speed (msg/s), and ETA.
-- **Control Management (`/forwardstop`):** Safely terminate active forwarding tasks at any time.
+- **Control Management (`/forwardstop`):** Safely terminate active professional forwarding tasks at any time.
 
 ### 📤 Standard & Interactive Forwarding
 - **String Session Support (`/ss`):** Use personal accounts to access restricted or private content.

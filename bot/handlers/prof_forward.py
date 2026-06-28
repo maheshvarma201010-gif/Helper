@@ -15,18 +15,21 @@ active_prof_tasks = {}
 
 @Client.on_message(filters.command("forward") & filters.user(Config.ADMINS) & filters.private, group=-2)
 async def prof_forward_command(client, message):
-    message.stop_propagation()
-    user_id = message.from_user.id
-    await db.reset_user(user_id)
-
     # Check if admin userbot is active
     if not hasattr(client, "admin_userbot") or not client.admin_userbot:
         if await db.get_admin_session():
-            await message.reply_text("⏳ Initializing admin session... please wait a moment and try again.")
+            # Try to initialize but don't block standard handler yet if it fails
             await client.init_admin_userbot()
-            return
+            if not client.admin_userbot:
+                 return # Let it fall through to standard handler
         else:
-            return await message.reply_text("❌ Please /login first to use the professional forwarding system.")
+            # Not logged in to professional system, let standard handler take over
+            return
+
+    # If we are here, we are logged in and want to use professional system
+    message.stop_propagation()
+    user_id = message.from_user.id
+    await db.reset_user(user_id)
 
     await db.update_user_state(user_id, "prof_fwd_awaiting_start")
     await message.reply_text(
@@ -168,10 +171,13 @@ async def prof_forward_worker(client, job_id, status_msg):
         target = job["target_chat"]
 
         last_update = 0
-
         processed_media_groups = set()
 
-        curr_id = job["start_id"]
+        curr_id = job["current_id"]
+
+        # Batch size for get_messages to increase speed
+        BATCH_SIZE = 20
+
         while curr_id <= job["end_id"]:
             # Check if job was stopped
             job = await db.get_prof_forward_job(job_id)
@@ -179,66 +185,74 @@ async def prof_forward_worker(client, job_id, status_msg):
                 break
 
             try:
-                # Use get_messages to fetch the message
-                msg = await userbot.get_messages(source, curr_id)
+                # Fetch a batch of messages
+                batch_ids = list(range(curr_id, min(curr_id + BATCH_SIZE, job["end_id"] + 1)))
+                messages = await userbot.get_messages(source, batch_ids)
 
-                if not msg or msg.empty:
-                    job["skipped"] += 1
-                    curr_id += 1
-                else:
-                    if msg.media_group_id:
-                        if msg.media_group_id in processed_media_groups:
-                            job["skipped"] += 1
-                            curr_id += 1
-                            continue
+                if not isinstance(messages, list):
+                    messages = [messages]
 
-                        try:
-                            # Fetch full media group
-                            messages = await userbot.get_media_group(source, curr_id)
-                            # Copy the whole group
-                            await userbot.copy_media_group(target, source, curr_id)
+                for msg in messages:
+                    # Refresh job status in inner loop to allow stopping mid-batch
+                    job = await db.get_prof_forward_job(job_id)
+                    if not job or job["status"] != "running":
+                         break
 
-                            processed_media_groups.add(msg.media_group_id)
-
-                            # Increment success by the number of messages in the group
-                            count = len(messages)
-                            job["success"] += count
-
-                            curr_id += 1
-                        except Exception as me:
-                            logger.error(f"Media group error: {me}")
-                            await userbot.copy_message(target, source, curr_id)
-                            job["success"] += 1
-                            curr_id += 1
+                    if not msg or msg.empty:
+                        job["skipped"] += 1
                     else:
-                        await userbot.copy_message(target, source, curr_id)
-                        job["success"] += 1
-                        curr_id += 1
+                        if msg.media_group_id:
+                            if msg.media_group_id in processed_media_groups:
+                                job["skipped"] += 1
+                            else:
+                                try:
+                                    # Fetch full media group
+                                    group_msgs = await userbot.get_media_group(source, msg.id)
+                                    # Copy the whole group
+                                    await userbot.copy_media_group(target, source, msg.id)
+                                    processed_media_groups.add(msg.media_group_id)
+                                    job["success"] += len(group_msgs)
+                                except Exception as me:
+                                    logger.error(f"Media group error: {me}")
+                                    await userbot.copy_message(target, source, msg.id)
+                                    job["success"] += 1
+                        else:
+                            await userbot.copy_message(target, source, msg.id)
+                            job["success"] += 1
+
+                    job["current_id"] = msg.id if msg and not msg.empty else curr_id
+                    # Optimization: only update DB every 5 messages or if it's the last one
+                    if job["success"] % 5 == 0 or msg.id == job["end_id"]:
+                        await db.update_prof_forward_job(job_id, {
+                            "success": job["success"],
+                            "failed": job["failed"],
+                            "skipped": job["skipped"],
+                            "current_id": job["current_id"]
+                        })
+
+                curr_id += len(batch_ids)
 
             except errors.FloodWait as e:
                 await asyncio.sleep(e.value + 1)
-                continue # Retry same curr_id
-            except errors.MessageIdInvalid:
-                job["skipped"] += 1
-                curr_id += 1
+                continue # Retry batch
             except Exception as e:
-                logger.error(f"Prof Forward Error on {curr_id}: {e}")
-                job["failed"] += 1
+                logger.error(f"Prof Forward Batch Error: {e}")
+                # Fallback: process one by one if batch fails
+                try:
+                    msg = await userbot.get_messages(source, curr_id)
+                    if not msg or msg.empty:
+                        job["skipped"] += 1
+                    else:
+                        await userbot.copy_message(target, source, curr_id)
+                        job["success"] += 1
+                except:
+                    job["failed"] += 1
+
                 curr_id += 1
-                if "USER_NOT_PARTICIPANT" in str(e):
-                    try: await userbot.join_chat(source)
-                    except: pass
+                await db.update_prof_forward_job(job_id, {"current_id": curr_id, "success": job["success"], "failed": job["failed"], "skipped": job["skipped"]})
 
-            job["current_id"] = curr_id
-            await db.update_prof_forward_job(job_id, {
-                "success": job["success"],
-                "failed": job["failed"],
-                "skipped": job["skipped"],
-                "current_id": curr_id
-            })
-
-            # Update status message periodically
-            if time.time() - last_update > 5:
+            # Update status message periodically (every 10 seconds)
+            if time.time() - last_update > 10:
                 processed = job["success"] + job["failed"] + job["skipped"]
                 total = job["total"]
                 percentage = (processed / total * 100) if total > 0 else 0
@@ -250,7 +264,7 @@ async def prof_forward_worker(client, job_id, status_msg):
                 eta_str = time.strftime("%H:%M:%S", time.gmtime(eta))
 
                 text = (
-                    f"📤 **Forwarding in Progress**\n\n"
+                    f"📤 **Forwarding in Progress (Optimized)**\n\n"
                     f"Progress: `{get_progress_bar(percentage)}` `{percentage:.1f}%`\n"
                     f"✅ Completed: `{job['success']}`\n"
                     f"❌ Failed: `{job['failed']}`\n"

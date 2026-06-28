@@ -56,6 +56,22 @@ async def cleanup_user_clients():
 @Client.on_message(filters.command("forward") & filters.private)
 async def forward_command(client, message):
     user_id = message.from_user.id
+
+    # If admin and logged in to professional system, let the group -2 handler take it.
+    # However, if group -2 handler decided not to stop propagation, we might reach here.
+    # If admin but NOT logged in, we should guide them to /login if they want professional system.
+    if user_id in Config.ADMINS:
+        if not hasattr(client, "admin_userbot") or not client.admin_userbot:
+            if await db.get_admin_session():
+                 await client.init_admin_userbot()
+                 if client.admin_userbot:
+                      # If we initialized it, we should probably let them use professional system.
+                      # But wait, group -2 already passed.
+                      # Let's just suggest /login or continue with standard.
+                      pass
+            else:
+                 await message.reply_text("💡 **Tip:** You can use the Professional Forwarding System for faster range copying. Use /login first.")
+
     await db.reset_user(user_id)
     if not await db.get_session(user_id):
         return await message.reply_text("❌ Please save your string session first using /ss")

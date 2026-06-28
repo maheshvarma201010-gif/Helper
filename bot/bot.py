@@ -16,18 +16,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Pre-load plugins from root 'plugins' directory to ensure handlers are registered correctly
-import glob
-import importlib
-try:
-    plugin_files = glob.glob("plugins/*.py")
-    for f in plugin_files:
-        name = f.replace("/", ".").replace(".py", "")
-        if name != "plugins.__init__":
-            importlib.import_module(name)
-            logger.info(f"Pre-loaded plugin: {name}")
-except Exception as e:
-    logger.error(f"Error pre-loading extra plugins: {e}")
 
 async def health_check(request):
     active_jobs = await db.get_all_active_tedit_jobs()
@@ -118,7 +106,15 @@ class Bot(Client):
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN,
-            plugins=dict(root="bot/handlers")
+            plugins=dict(
+                root="bot/handlers",
+                include=[
+                    "admin", "auto_approve", "auto_buttons", "auto_font", "font",
+                    "forward", "redirect", "replace", "replace_domain",
+                    "scraper", "search", "sequence", "sessions", "start", "tedit",
+                    "prof_login", "prof_logout", "prof_forward"
+                ]
+            )
         )
         self.admin_userbot = None
 
@@ -131,8 +127,8 @@ class Bot(Client):
         from pyrogram.types import BotCommand
         await self.set_bot_commands([
             BotCommand("start", "Start the bot"),
-            BotCommand("forward", "Cleanly copy messages between links"),
-            BotCommand("login", "Admin Login for Professional Forward"),
+            BotCommand("forward", "Copy messages between links"),
+            BotCommand("login", "Admin Login (Professional System)"),
             BotCommand("logout", "Admin Logout"),
             BotCommand("forwardstop", "Stop Professional Forward Jobs"),
             BotCommand("ss", "Save your string session"),
@@ -149,7 +145,7 @@ class Bot(Client):
 
         # Resume Professional Forwarding Tasks
         try:
-            from plugins.forward import init_prof_worker
+            from bot.handlers.prof_forward import init_prof_worker
             await init_prof_worker(self)
         except Exception as e:
             logger.error(f"Error resuming professional workers: {e}")
