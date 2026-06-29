@@ -7,6 +7,8 @@ from bot.core.logger import logger
 from bot.utils.constants import MessageTypes
 
 class ForwardEngine:
+    BATCH_SIZE = 100
+
     def __init__(self, client: Client, bot_client: Client):
         self.client = client
         self.bot_client = bot_client
@@ -24,45 +26,74 @@ class ForwardEngine:
         total = end_id - start_id + 1
         tracker = ProgressTracker(total)
 
-        logger.info(f"Starting forward from {start_id} to {end_id}")
+        logger.info(f"Starting ULTRA SPEED forward from {start_id} to {end_id}")
 
-        msg_id = start_id
-        while msg_id <= end_id:
+        current_id = start_id
+        while current_id <= end_id:
             if not self.is_running:
                 break
 
-            try:
-                msg = await self.client.get_messages(source_chat, msg_id)
-                if not msg or msg.empty:
-                    tracker.increment_skipped()
-                elif self._matches_filters(msg, filters):
-                    await self._copy_message(msg, target_chat)
-                    tracker.increment_success()
-                else:
-                    tracker.increment_skipped()
+            batch_end = min(current_id + self.BATCH_SIZE - 1, end_id)
+            message_ids = list(range(current_id, batch_end + 1))
 
-                msg_id += 1
+            try:
+                # ULTRA SPEED: Fetch batch
+                messages = await self.client.get_messages(source_chat, message_ids)
+
+                if not isinstance(messages, list):
+                    messages = [messages]
+
+                # Maintain strict order: messages are returned in the order of IDs provided
+                for msg in messages:
+                    if not self.is_running:
+                        break
+
+                    if not msg or msg.empty:
+                        tracker.increment_skipped()
+                    elif self._matches_filters(msg, filters):
+                        # Attempt forward
+                        try:
+                            await self._copy_message(msg, target_chat)
+                            tracker.increment_success()
+                        except errors.FloodWait as e:
+                            logger.warning(f"FloodWait during copy: {e.value} seconds. Retrying...")
+                            await asyncio.sleep(e.value)
+                            # Retry current message once
+                            try:
+                                await self._copy_message(msg, target_chat)
+                                tracker.increment_success()
+                            except:
+                                tracker.increment_failed()
+                        except Exception as e:
+                            logger.error(f"Failed to copy message {msg.id}: {e}")
+                            tracker.increment_failed()
+                    else:
+                        tracker.increment_skipped()
+
+                    # Minimal delay for high speed (adjust as needed)
+                    await asyncio.sleep(0.05)
+
+                current_id = batch_end + 1
+
+                if tracker.should_update():
+                    await self._update_status(status_message, tracker, batch_end)
 
             except errors.FloodWait as e:
-                logger.warning(f"FloodWait: {e.value} seconds. Retrying {msg_id} after sleep.")
+                logger.warning(f"FloodWait during batch fetch: {e.value} seconds. Retrying batch.")
                 await asyncio.sleep(e.value)
-                # Do not increment msg_id, so it retries
+                # Retry same current_id
+                continue
             except Exception as e:
-                logger.error(f"Error forwarding {msg_id}: {e}")
-                tracker.increment_failed()
-                msg_id += 1
-
-            if tracker.should_update():
-                await self._update_status(status_message, tracker, msg_id)
-
-            # Small delay to prevent flood
-            await asyncio.sleep(1)
+                logger.error(f"Error fetching batch {current_id}-{batch_end}: {e}")
+                # If batch fails, skip to next batch to avoid getting stuck
+                current_id = batch_end + 1
 
         await self._update_status(status_message, tracker, end_id, final=True)
         logger.info("Forwarding complete.")
 
-    def stop(self):
-        self.is_running = False
+    async def _copy_message(self, msg: Message, target_chat: Any):
+        # We use copy_message to avoid forwarded tag
+        await msg.copy(target_chat)
 
     def _matches_filters(self, msg: Message, filters: List[str]) -> bool:
         if not filters or "🌐 All Media" in filters:
@@ -93,12 +124,11 @@ class ForwardEngine:
 
         return False
 
-    async def _copy_message(self, msg: Message, target_chat: Any):
-        # We use copy_message to avoid forwarded tag
-        await msg.copy(target_chat)
+    def stop(self):
+        self.is_running = False
 
     async def _update_status(self, status_msg: Message, tracker: ProgressTracker, current_id: int, final: bool = False):
-        status = "✅ **Completed**" if final else "📤 **Forwarding...**"
+        status = "✅ **Completed**" if final else "⚡ **ULTRA SPEED Forwarding...**"
         if not self.is_running and not final:
             status = "🛑 **Stopped**"
 
