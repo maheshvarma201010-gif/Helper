@@ -1,55 +1,65 @@
-# Ultimate Telegram File Sequencer & Replacement Bot (Bot-Only Version)
+# 🚀 Production-Grade Telegram Forwarding Bot
 
-A professional, production-ready Telegram bot for sequencing files, bulk text replacement, and advanced channel font styling. This version is optimized for stability and uses only the official Telegram Bot API (no Userbot required).
+A powerful and scalable Telegram Forwarding Bot built with Pyrogram and MongoDB.
 
-## Features
+## ✨ Features
 
-- **File Sequencing**: Automatically sort collected files by Season, Quality, and Episode using `/sequence` and `/sort`.
-- **Bulk Replacement**: Replace text, links, and usernames across channels.
-- **Font Styling**:
-    - `/font <link>`: Apply Unicode font styles to a range of messages (e.g., `https://t.me/c/123/10-20`).
-    - `/fontchannel`: Set a default font for all new posts in a channel.
-- **Search & Indexing**: Index channels and search with fuzzy matching.
-- **Production Ready**: Asynchronous architecture, MongoDB persistence, and Dockerized.
-- **Health Check**: Built-in HTTP server for deployment platforms like Render.
+- **✅ Multi-Step Forwarding Wizard:** Intuitive flow to select message ranges and targets.
+- **📂 Message Filtering:** Toggle between Photos, Videos, Documents, Audio, and more.
+- **🔐 Secure Login:** Admin-only login with OTP and 2FA support using String Sessions.
+- **📊 Real-time Progress:** Live updates with speed, ETA, and progress bar.
+- **🛡 Production Ready:** Asynchronous, error-resilient, and Docker-ready.
+- **🔌 Modular Architecture:** Easily extendable plugin system.
 
-## Commands
+## 🛠 Installation
 
-### User Commands
-- `/start` - Get started and see available commands.
-- `/search <query>` - Search indexed content.
-- `/sequence` - Enter collection mode to send files for sorting.
-- `/replace` - Start the bulk text/link replacement workflow.
-- `/replace_domain` - Perform domain-wide replacement (Owner only).
-- `/font <message_link>` - Apply a Unicode font style to a range of messages.
-- `/fontchannel <channel_id>` - Set a default Unicode font for a channel.
-- `/redirect <url>` - Follow all HTTP redirects and retrieve the final destination URL.
+### 1. Local Deployment
 
-### Admin Commands
-- `/setchannel <id>` - Set the source channel for indexing.
-- `/setbot <username>` - Set the batch bot username for search links.
-- `/reindex` - Scan or rescan the source channel for content.
-- `/verify` - Verify bot access and permissions in configured channels.
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Create a `.env` file based on `.env.example`.
+4. Run the bot:
+   ```bash
+   python -m bot.bot
+   ```
 
-## Environment Variables
+### 2. Docker Deployment
 
-- `BOT_TOKEN`: Your Telegram Bot Token.
+1. Clone the repository.
+2. Configure `.env`.
+3. Start with Docker Compose:
+   ```bash
+   docker-compose up --build -d
+   ```
+
+## ⚙️ Environment Variables
+
 - `API_ID`: Your Telegram API ID.
 - `API_HASH`: Your Telegram API Hash.
-- `MONGO_URI`: Your MongoDB Connection String.
-- `OWNER_ID`: Your Telegram User ID.
-- `ADMINS`: Comma-separated list of authorized Admin IDs.
-- `LOG_CHANNEL`: ID of the channel for logs.
-- `PORT`: Port for health check (default: 8080).
-- `REPLACE_TEXT_CHANNELS`: Comma-separated list of authorized channel IDs for replacement.
+- `BOT_TOKEN`: Your Telegram Bot Token.
+- `MONGO_URI`: MongoDB connection string.
+- `ADMINS`: Comma-separated list of admin user IDs.
 
-## Deployment on Render
+## 🤖 Commands
 
-1. **Fork** this repository.
-2. Create a **MongoDB** database.
-3. Create a new **Web Service** on Render.
-4. Connect your repository and configure the environment variables.
-5. The bot will automatically start the health check server on the assigned port.
+- `/start`: Start the bot.
+- `/help`: Display help message.
+- `/login`: Securely log in your Telegram account.
+- `/logout`: Remove your session.
+- `/forward`: Start the forwarding wizard.
+- `/forwardstop`: Stop an active forwarding task.
+- `/stats`: View bot usage statistics.
+- `/ping`: Check bot latency.
 
-## Note on Permissions
-Since this bot does not use a Userbot, it **MUST** be an administrator in any channel it needs to index, edit, or stylize. It needs "Edit Messages" and "Post Messages" permissions.
+## 🤝 Troubleshooting
+
+- **Peer ID Invalid:** Ensure the bot/account has accessed the chat recently.
+- **FloodWait:** Telegram is rate-limiting you. The bot handles this automatically.
+- **Session Expired:** Re-login using `/login`.
+
+## 📄 License
+
+MIT License.

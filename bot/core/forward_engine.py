@@ -1,0 +1,121 @@
+import asyncio
+from typing import List, Dict, Any
+from pyrogram import Client, errors
+from pyrogram.types import Message
+from bot.core.progress import ProgressTracker
+from bot.core.logger import logger
+from bot.utils.constants import MessageTypes
+
+class ForwardEngine:
+    def __init__(self, client: Client, bot_client: Client):
+        self.client = client
+        self.bot_client = bot_client
+        self.is_running = True
+
+    async def start_forward(
+        self,
+        source_chat: Any,
+        target_chat: Any,
+        start_id: int,
+        end_id: int,
+        filters: List[str],
+        status_message: Message
+    ):
+        total = end_id - start_id + 1
+        tracker = ProgressTracker(total)
+
+        logger.info(f"Starting forward from {start_id} to {end_id}")
+
+        msg_id = start_id
+        while msg_id <= end_id:
+            if not self.is_running:
+                break
+
+            try:
+                msg = await self.client.get_messages(source_chat, msg_id)
+                if not msg or msg.empty:
+                    tracker.increment_skipped()
+                elif self._matches_filters(msg, filters):
+                    await self._copy_message(msg, target_chat)
+                    tracker.increment_success()
+                else:
+                    tracker.increment_skipped()
+
+                msg_id += 1
+
+            except errors.FloodWait as e:
+                logger.warning(f"FloodWait: {e.value} seconds. Retrying {msg_id} after sleep.")
+                await asyncio.sleep(e.value)
+                # Do not increment msg_id, so it retries
+            except Exception as e:
+                logger.error(f"Error forwarding {msg_id}: {e}")
+                tracker.increment_failed()
+                msg_id += 1
+
+            if tracker.should_update():
+                await self._update_status(status_message, tracker, msg_id)
+
+            # Small delay to prevent flood
+            await asyncio.sleep(1)
+
+        await self._update_status(status_message, tracker, end_id, final=True)
+        logger.info("Forwarding complete.")
+
+    def stop(self):
+        self.is_running = False
+
+    def _matches_filters(self, msg: Message, filters: List[str]) -> bool:
+        if not filters or "🌐 All Media" in filters:
+            return True
+
+        if msg.photo and MessageTypes.PHOTO in filters: return True
+        if msg.document and MessageTypes.DOCUMENT in filters: return True
+        if msg.video and MessageTypes.VIDEO in filters: return True
+        if msg.audio and MessageTypes.AUDIO in filters: return True
+        if msg.voice and MessageTypes.VOICE in filters: return True
+        if msg.animation and MessageTypes.ANIMATION in filters: return True
+        if msg.sticker and MessageTypes.STICKER in filters: return True
+        if msg.poll and MessageTypes.POLL in filters: return True
+        if msg.location and MessageTypes.LOCATION in filters: return True
+        if msg.contact and MessageTypes.CONTACT in filters: return True
+        if msg.video_note and MessageTypes.VIDEO_NOTE in filters: return True
+        if msg.media_group_id and MessageTypes.ALBUM in filters: return True
+
+        # Text and Link filters
+        if msg.text or msg.caption:
+            text = msg.text or msg.caption
+            if MessageTypes.TEXT in filters:
+                return True
+            if MessageTypes.LINK in filters:
+                # Basic link check
+                if "http" in text or "t.me" in text:
+                    return True
+
+        return False
+
+    async def _copy_message(self, msg: Message, target_chat: Any):
+        # We use copy_message to avoid forwarded tag
+        await msg.copy(target_chat)
+
+    async def _update_status(self, status_msg: Message, tracker: ProgressTracker, current_id: int, final: bool = False):
+        status = "✅ **Completed**" if final else "📤 **Forwarding...**"
+        if not self.is_running and not final:
+            status = "🛑 **Stopped**"
+
+        text = (
+            f"{status}\n\n"
+            f"📊 **Progress:** {tracker.get_progress_bar()}\n"
+            f"🔢 **Total:** {tracker.total}\n"
+            f"✅ **Success:** {tracker.success}\n"
+            f"❌ **Failed:** {tracker.failed}\n"
+            f"⏭ **Skipped:** {tracker.skipped}\n"
+            f"⚡ **Speed:** {tracker.get_speed()}\n"
+            f"⏳ **ETA:** {tracker.get_eta()}\n"
+            f"📍 **Current ID:** `{current_id}`"
+        )
+        try:
+            await status_msg.edit_text(text)
+        except errors.FloodWait as e:
+            await asyncio.sleep(e.value)
+        except Exception:
+            pass
