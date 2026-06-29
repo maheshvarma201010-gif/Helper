@@ -36,6 +36,7 @@ async def prof_forward_command(client, message):
         "🚀 **Professional Forwarding**\n\n"
         "Please send the **First Message Link**."
     )
+    logger.info(f"Admin {user_id} started professional forwarding setup.")
 
 @Client.on_message(filters.command("forwardstop") & filters.user(Config.ADMINS) & filters.private, group=-2)
 async def prof_forwardstop_command(client, message):
@@ -52,6 +53,7 @@ async def prof_forwardstop_command(client, message):
         if job_id in active_prof_tasks:
             active_prof_tasks[job_id].cancel()
 
+    logger.info(f"Admin {user_id} stopped {len(active_jobs)} professional jobs.")
     await message.reply_text(f"🛑 Stopped {len(active_jobs)} professional job(s).")
 
 @Client.on_message(filters.private & filters.user(Config.ADMINS), group=-2)
@@ -69,6 +71,7 @@ async def handle_prof_fwd_input(client, message):
 
     if text == "/cancel":
         await db.reset_user(user_id)
+        logger.info(f"Admin {user_id} cancelled forwarding setup.")
         return await message.reply_text("✅ Operation cancelled.")
 
     user_data = await db.get_user(user_id)
@@ -78,6 +81,12 @@ async def handle_prof_fwd_input(client, message):
         chat_id, first_id, _ = parse_message_link(text)
         if not chat_id:
             return await message.reply_text("❌ Invalid link. Please send a valid Telegram message link.")
+
+        # Verify source access
+        try:
+            await client.admin_userbot.get_chat(chat_id)
+        except Exception as e:
+            return await message.reply_text(f"❌ Cannot access source channel: {e}")
 
         prof_data["source_chat"] = chat_id
         prof_data["start_id"] = first_id
@@ -204,6 +213,7 @@ async def prof_fwd_filter_callback(client, callback_query):
         status_msg = await callback_query.message.edit_text("⏳ Starting professional forward...")
         task = asyncio.create_task(prof_forward_worker(client, job_id, status_msg))
         active_prof_tasks[job_id] = task
+        logger.info(f"Admin {user_id} started professional forward job {job_id}.")
         return
 
     prof_data["filters"] = selected
@@ -228,14 +238,13 @@ async def init_prof_worker(client):
                 status_msg = await client.send_message(Config.OWNER_ID, f"🔄 Resuming professional job `{job_id}`...")
                 task = asyncio.create_task(prof_forward_worker(client, job_id, status_msg))
                 active_prof_tasks[job_id] = task
+                logger.info(f"Resumed job {job_id} on startup.")
             except: pass
 
 def is_allowed_type(msg, filters):
     if not msg or msg.empty: return False
 
     if "all_media" in filters:
-        # User requested: If All Media is selected, forward every supported message type.
-        # But we still check if it has some content we can forward.
         return True
 
     # Links (Contains URLs or Text Links)
@@ -290,6 +299,7 @@ async def prof_forward_worker(client, job_id, status_msg):
         job = await db.get_prof_forward_job(job_id)
         if not job: return
 
+        # Wait for userbot to be ready
         while not hasattr(client, "admin_userbot") or not client.admin_userbot:
             await asyncio.sleep(5)
 
@@ -346,8 +356,9 @@ async def prof_forward_worker(client, job_id, status_msg):
                                     for m in group_msgs:
                                         if is_allowed_type(m, filters_list) and job["start_id"] <= m.id <= job["end_id"]:
                                             count_valid += 1
-                                            if m.photo: media.append(InputMediaPhoto(m.photo.file_id, caption=m.caption, caption_entities=m.caption_entities))
-                                            elif m.video: media.append(InputMediaVideo(m.video.file_id, caption=m.caption, caption_entities=m.caption_entities))
+                                            # Preserve all metadata including spoilers and entities
+                                            if m.photo: media.append(InputMediaPhoto(m.photo.file_id, caption=m.caption, caption_entities=m.caption_entities, has_spoiler=m.has_media_spoiler))
+                                            elif m.video: media.append(InputMediaVideo(m.video.file_id, caption=m.caption, caption_entities=m.caption_entities, has_spoiler=m.has_media_spoiler))
                                             elif m.audio: media.append(InputMediaAudio(m.audio.file_id, caption=m.caption, caption_entities=m.caption_entities))
                                             elif m.document: media.append(InputMediaDocument(m.document.file_id, caption=m.caption, caption_entities=m.caption_entities))
 
@@ -362,14 +373,11 @@ async def prof_forward_worker(client, job_id, status_msg):
                                                 job["success"] += 1
                                                 break
                                     else:
-                                        # No valid items in the group (within range/filters)
-                                        # We don't increment skipped here because the individual IDs will be skipped in the batch loop
-                                        # except the first one which we just saw.
                                         job["skipped"] += 1
 
                                     processed_media_groups.add(msg.media_group_id)
                                 except Exception as me:
-                                    logger.error(f"Media group error: {me}")
+                                    logger.error(f"Media group error in job {job_id}: {me}")
                                     await userbot.copy_message(target, source, msg.id)
                                     job["success"] += 1
                                     processed_media_groups.add(msg.media_group_id)
@@ -390,10 +398,11 @@ async def prof_forward_worker(client, job_id, status_msg):
                 curr_id += len(batch_ids)
 
             except errors.FloodWait as e:
+                logger.warning(f"Worker job {job_id} hitting FloodWait: {e.value}s")
                 await asyncio.sleep(e.value + 1)
                 continue # Retry batch
             except Exception as e:
-                logger.error(f"Prof Forward Batch Error: {e}")
+                logger.error(f"Prof Forward Batch Error in job {job_id}: {e}")
                 # Fallback: process one by one if batch fails
                 try:
                     msg = await userbot.get_messages(source, curr_id)
@@ -445,6 +454,7 @@ async def prof_forward_worker(client, job_id, status_msg):
         if job and job["status"] == "running":
             await db.update_prof_forward_job(job_id, {"status": "completed"})
             await status_msg.edit_text(f"✅ **Forwarding Completed!**\n\nTotal: `{job['total']}`\nSuccess: `{job['success']}`\nFailed: `{job['failed']}`\nSkipped: `{job['skipped']}`")
+            logger.info(f"Professional forward job {job_id} completed.")
         elif job and job["status"] == "stopped":
             await status_msg.edit_text(f"🛑 **Forwarding Stopped.**\n\nSuccess: `{job['success']}`")
 

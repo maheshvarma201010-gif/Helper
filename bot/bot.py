@@ -16,6 +16,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Apply necessary monkey-patches early
+try:
+    from bot.utils.patches import apply_patches
+    apply_patches()
+except Exception as e:
+    logger.error(f"Error applying patches: {e}")
+
 
 async def health_check(request):
     active_jobs = await db.get_all_active_tedit_jobs()
@@ -106,15 +113,7 @@ class Bot(Client):
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN,
-            plugins=dict(
-                root="bot.handlers",
-                include=[
-                    "admin", "auto_approve", "auto_buttons", "auto_font", "font",
-                    "forward", "redirect", "replace", "replace_domain",
-                    "scraper", "search", "sequence", "sessions", "start", "tedit",
-                    "prof_login", "prof_logout", "prof_forward"
-                ]
-            )
+            plugins=dict(root="bot.handlers")
         )
         self.admin_userbot = None
 
