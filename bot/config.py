@@ -9,6 +9,7 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     ADMINS = [int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
+    PORT = int(os.getenv("PORT", 8080))
 
     # Session encryption key (optional but recommended)
     SESSION_ENCRYPTION_KEY = os.getenv("SESSION_ENCRYPTION_KEY", "super-secret-key")

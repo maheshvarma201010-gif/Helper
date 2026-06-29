@@ -25,8 +25,11 @@ class ClientManager:
         sessions = await get_all_sessions()
         for session in sessions:
             user_id = session["user_id"]
-            session_string = session["session_string"]
             try:
+                session_string = await get_session(user_id)
+                if not session_string:
+                    continue
+
                 client = Client(
                     name=f"user_{user_id}",
                     api_id=Config.API_ID,

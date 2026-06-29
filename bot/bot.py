@@ -1,6 +1,21 @@
 import asyncio
+from aiohttp import web
+from bot.config import Config
 from bot.core.client import client_manager
 from bot.core.logger import logger
+
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/health", health_check)
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", Config.PORT)
+    await site.start()
+    logger.info(f"Health check server started on port {Config.PORT}")
 
 async def main():
     logger.info("Starting Forwarding Bot...")
@@ -10,6 +25,9 @@ async def main():
 
     # Load existing user sessions
     await client_manager.load_user_sessions()
+
+    # Start web server for health checks
+    await start_web_server()
 
     logger.info("Bot is now running. Press Ctrl+C to stop.")
 

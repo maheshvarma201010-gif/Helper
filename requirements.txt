@@ -3,6 +3,7 @@ tgcrypto
 motor
 dnspython
 python-dotenv
+aiohttp
 pytest
 pytest-asyncio
 cryptography

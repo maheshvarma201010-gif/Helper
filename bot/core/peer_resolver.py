@@ -1,6 +1,6 @@
 import re
 from typing import Union
-from pyrogram import Client
+from pyrogram import Client, errors
 from pyrogram.errors import PeerIdInvalid, UsernameInvalid, ChannelInvalid, ChatInvalid
 from bot.utils.exceptions import PeerError
 
@@ -12,20 +12,32 @@ class PeerResolver:
             if isinstance(peer, int):
                 return await client.get_chat(peer)
 
-            # Handle usernames and links
-            if isinstance(peer, str):
-                peer = peer.strip()
-                if peer.startswith("https://t.me/"):
-                    peer = peer.replace("https://t.me/", "")
-                    if "/" in peer:
-                        # Probably a private link or message link, handle appropriately
-                        # For simplicity, we try to get the chat from the username part
-                        peer = peer.split("/")[0]
+            peer = str(peer).strip()
 
-                if peer.startswith("@"):
-                    peer = peer[1:]
+            # Handle invite links
+            if "t.me/+" in peer or "t.me/joinchat/" in peer:
+                try:
+                    return await client.join_chat(peer)
+                except errors.UserAlreadyParticipant:
+                    # If already in, we still need to get the chat object
+                    # We can try to extract the hash and use get_chat
+                    pass
 
-                return await client.get_chat(peer)
+            # Handle message links/usernames
+            if peer.startswith("https://t.me/"):
+                peer = peer.replace("https://t.me/", "")
+                if "/" in peer:
+                    peer = peer.split("/")[0]
+
+            if peer.startswith("@"):
+                peer = peer[1:]
+
+            # Handle private channel numeric IDs in links (t.me/c/12345/...)
+            if peer.startswith("c/"):
+                chat_id = int("-100" + peer.split("/")[1])
+                return await client.get_chat(chat_id)
+
+            return await client.get_chat(peer)
 
         except (PeerIdInvalid, UsernameInvalid, ChannelInvalid, ChatInvalid) as e:
             raise PeerError(f"Could not resolve peer '{peer}': {str(e)}")
