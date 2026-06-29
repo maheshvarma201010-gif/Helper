@@ -54,11 +54,16 @@ async def forward_state_handler(client: Client, message: Message):
 
         data["last_link"] = message.text
         await set_user_state(user_id, "awaiting_target", data)
-        await message.reply("🎯 Now send the **Target Channel** (Username, ID, or Link).")
+        await message.reply("🎯 Now send the **Target Channel** (Username, ID, or Link).\n\n💡 **Tip:** You can also **forward any message** from the target channel here to help the bot resolve it!")
 
     elif state == "awaiting_target":
-        target = message.text.strip()
         user_client = await client_manager.get_user_client(user_id)
+
+        # FIX: Handle forwarded message to resolve PEER_ID_INVALID
+        if message.forward_from_chat:
+            target = message.forward_from_chat.id
+        else:
+            target = message.text.strip()
 
         try:
             # Simple check if target is accessible
@@ -77,6 +82,20 @@ async def forward_state_handler(client: Client, message: Message):
             )
         except Exception as e:
             await message.reply(f"❌ Error: {e}")
+
+    elif state == "awaiting_verification_forward":
+        if not message.forward_from_chat:
+            return await message.reply("❌ Please **forward** a message from the target channel.")
+
+        target_id = message.forward_from_chat.id
+        if target_id != data.get("target"):
+             # If they send a different channel, we could update it or warn them.
+             # For now, let's just update it to be safe.
+             data["target"] = target_id
+
+        await message.reply("✅ Target verified! Starting forwarding job...")
+        asyncio.create_task(run_forward_job(client, user_id, data))
+        await set_user_state(user_id, None)
 
 @Client.on_callback_query(filters.regex(r"^(toggle_|select_all|clear_all|start_forward)"))
 async def filter_callback_handler(client: Client, callback_query: CallbackQuery):
@@ -107,9 +126,14 @@ async def filter_callback_handler(client: Client, callback_query: CallbackQuery)
         if not selected:
             return await callback_query.answer("Please select at least one filter!", show_alert=True)
 
-        await callback_query.message.edit_text("⏳ Preparing forwarding engine...")
-        asyncio.create_task(run_forward_job(client, user_id, data))
-        await set_user_state(user_id, None)
+        # User requested: "bot ask forward msg ... after ask types"
+        # This helps resolve PEER_ID_INVALID and confirms access
+        await set_user_state(user_id, "awaiting_verification_forward", data)
+        await callback_query.message.edit_text(
+            "🛡️ **Final Verification Step**\n\n"
+            "Please **forward any message** from the **Target Channel** to me here.\n"
+            "This ensures I can resolve the channel ID correctly and have the necessary permissions."
+        )
         return
 
     data["selected_filters"] = selected
