@@ -15,7 +15,7 @@ async def login_handler(client: Client, message: Message):
     await set_user_state(message.from_user.id, "awaiting_phone")
     await message.reply("📱 Please enter your phone number with country code.\nExample: `+91XXXXXXXXXX`")
 
-@Client.on_message(filters.private & ~filters.command(["start", "help", "login", "logout", "forward", "forwardstop", "stats", "ping"]))
+@Client.on_message(filters.private & ~filters.command(["start", "help", "login", "logout", "forward", "forwardstop", "stats", "ping"]), group=1)
 async def auth_state_handler(client: Client, message: Message):
     user_id = message.from_user.id
     state_info = await get_user_state(user_id)
@@ -23,10 +23,19 @@ async def auth_state_handler(client: Client, message: Message):
         return
 
     state = state_info.get("state")
+    if not state or not state.startswith("awaiting_"):
+        message.continue_propagation()
+        return
+
+    if state not in ["awaiting_phone", "awaiting_otp", "awaiting_2fa"]:
+        message.continue_propagation()
+        return
     data = state_info.get("data", {})
 
     if state == "awaiting_phone":
-        phone_number = message.text.strip()
+        phone_number = message.text.strip().replace(" ", "")
+        logger.info(f"Connecting temp client for {user_id} with phone {phone_number}")
+
         temp_client = Client(
             f"temp_{user_id}",
             api_id=Config.API_ID,
@@ -34,6 +43,7 @@ async def auth_state_handler(client: Client, message: Message):
             in_memory=True
         )
         await temp_client.connect()
+
         try:
             code_info = await temp_client.send_code(phone_number)
             data["phone"] = phone_number
@@ -42,11 +52,13 @@ async def auth_state_handler(client: Client, message: Message):
             client_manager.user_clients[f"temp_{user_id}"] = temp_client
 
             await set_user_state(user_id, "awaiting_otp", data)
-            await message.reply("📨 OTP sent. Please enter the OTP.")
+            await message.reply("📨 OTP sent. Please enter the OTP in the format: `1 2 3 4 5` (with spaces) or `12345`.")
         except errors.FloodWait as e:
-            await message.reply(f"FloodWait: Please wait {e.value} seconds.")
+            await message.reply(f"❌ FloodWait: Please wait {e.value} seconds before trying again.")
+            await temp_client.disconnect()
         except Exception as e:
-            await message.reply(f"Error: {e}")
+            logger.error(f"Error sending code: {e}")
+            await message.reply(f"❌ Error: {e}")
             await temp_client.disconnect()
 
     elif state == "awaiting_otp":

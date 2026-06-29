@@ -27,7 +27,7 @@ async def forward_command_handler(client: Client, message: Message):
     await set_user_state(user_id, "awaiting_first_link")
     await message.reply("🔗 Please send the **First Message Link**.")
 
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "help", "login", "logout", "forward", "forwardstop", "stats", "ping"]))
+@Client.on_message(filters.private & filters.text & ~filters.command(["start", "help", "login", "logout", "forward", "forwardstop", "stats", "ping"]), group=2)
 async def forward_state_handler(client: Client, message: Message):
     user_id = message.from_user.id
     state_info = await get_user_state(user_id)
@@ -35,6 +35,9 @@ async def forward_state_handler(client: Client, message: Message):
         return
 
     state = state_info.get("state")
+    if not state or state not in ["awaiting_first_link", "awaiting_last_link", "awaiting_target"]:
+        message.continue_propagation()
+        return
     data = state_info.get("data", {})
 
     if state == "awaiting_first_link":
