@@ -3,8 +3,6 @@ tgcrypto
 motor
 dnspython
 python-dotenv
-aiohttp
-aiohttp-jinja2
-jinja2
-cloudscraper
-beautifulsoup4
+pytest
+pytest-asyncio
+cryptography
