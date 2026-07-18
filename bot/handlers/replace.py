@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 import time
-from typing import Optional, List, Dict, Set, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any
 from dataclasses import dataclass, field
 from collections import deque
 
@@ -67,6 +67,9 @@ class ReplacementStats:
         filled = int(round((percentage / 100.0) * width))
         filled = max(0, min(width, filled))
         return "█" * filled + "░" * (width - filled)
+    
+    def get_percentage(self) -> int:
+        return int((self.processed / self.total) * 100) if self.total > 0 else 0
 
 def format_duration(seconds: int) -> str:
     if seconds < 0:
@@ -78,26 +81,65 @@ def format_duration(seconds: int) -> str:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
 
-def extract_urls_from_caption(caption: str) -> List[Tuple[str, int, int]]:
+def parse_message_link(link: str) -> Tuple[Optional[str], Optional[int], Optional[str]]:
     """
-    Extract all URLs from caption with their positions
+    Parse Telegram message link to extract chat_id and message_id
+    Supports formats:
+    - https://t.me/channel/100
+    - https://t.me/c/123456789/100
+    - https://t.me/username/100
+    """
+    if not link:
+        return None, None, None
+    
+    link = link.strip()
+    
+    # Pattern for: https://t.me/channel/100 or https://t.me/username/100
+    pattern1 = r'https?://t\.me/([^/]+)/(\d+)'
+    match = re.search(pattern1, link)
+    if match:
+        chat_identifier = match.group(1)
+        msg_id = int(match.group(2))
+        return chat_identifier, msg_id, None
+    
+    # Pattern for: https://t.me/c/123456789/100
+    pattern2 = r'https?://t\.me/c/(\d+)/(\d+)'
+    match = re.search(pattern2, link)
+    if match:
+        chat_id = int(match.group(1))
+        msg_id = int(match.group(2))
+        return chat_id, msg_id, None
+    
+    # Try to extract from any URL with numbers
+    pattern3 = r'https?://[^/]+/(?:c/)?(\d+)/(\d+)'
+    match = re.search(pattern3, link)
+    if match:
+        chat_id = int(match.group(1))
+        msg_id = int(match.group(2))
+        return chat_id, msg_id, None
+    
+    return None, None, None
+
+def extract_urls_from_text(text: str) -> List[Tuple[str, int, int]]:
+    """
+    Extract all URLs from text with their positions
     Returns: List of (url, start_pos, end_pos)
     """
     urls = []
     
+    if not text:
+        return urls
+    
     # Pattern for markdown links: [text](url)
     markdown_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-    for match in re.finditer(markdown_pattern, caption):
+    for match in re.finditer(markdown_pattern, text):
         url = match.group(2)
         if url.startswith(('http://', 'https://')):
-            # Get the position of the URL within the markdown
-            url_start = match.start(2)
-            url_end = match.end(2)
-            urls.append((url, url_start, url_end))
+            urls.append((url, match.start(2), match.end(2)))
     
     # Pattern for plain URLs
     url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-    for match in re.finditer(url_pattern, caption):
+    for match in re.finditer(url_pattern, text):
         url = match.group(0)
         # Check if this URL is already inside a markdown link
         is_inside_markdown = False
@@ -110,7 +152,7 @@ def extract_urls_from_caption(caption: str) -> List[Tuple[str, int, int]]:
     
     return urls
 
-def normalize_url_for_comparison(url: str) -> str:
+def normalize_url(url: str) -> str:
     """Normalize URL for comparison"""
     url = url.strip()
     # Remove trailing slash
@@ -121,35 +163,35 @@ def normalize_url_for_comparison(url: str) -> str:
     url = re.sub(r'^http://', 'https://', url)
     return url.lower()
 
-def find_and_replace_urls(caption: str, targets: List[str], replacement: str) -> Tuple[str, Dict[str, int]]:
+def replace_urls_in_text(text: str, targets: List[str], replacement: str) -> Tuple[str, Dict[str, int]]:
     """
-    Find and replace URLs in caption
-    Returns: (new_caption, replacements_count)
+    Find and replace URLs in text
+    Returns: (new_text, replacements_count)
     """
-    if not caption:
-        return caption, {}
+    if not text:
+        return text, {}
     
     replacements_count = {}
-    new_caption = caption
+    new_text = text
     
-    # Sort targets by length (longest first) for proper replacement
+    # Sort targets by length (longest first)
     targets_sorted = sorted(targets, key=len, reverse=True)
     
-    # Extract all URLs from caption
-    urls = extract_urls_from_caption(caption)
+    # Extract all URLs from text
+    urls = extract_urls_from_text(text)
     
     # Check each URL against targets
     for url, start, end in urls:
-        url_normalized = normalize_url_for_comparison(url)
+        url_normalized = normalize_url(url)
         
         for target in targets_sorted:
-            target_normalized = normalize_url_for_comparison(target)
+            target_normalized = normalize_url(target)
             
-            # Check if URL contains the target or vice versa
+            # Check if URL contains the target
             if target_normalized in url_normalized or url_normalized in target_normalized:
                 # Replace the URL
                 new_url = url.replace(target, replacement)
-                new_caption = new_caption[:start] + new_url + new_caption[end:]
+                new_text = new_text[:start] + new_url + new_text[end:]
                 
                 # Update counts
                 replacements_count[target] = replacements_count.get(target, 0) + 1
@@ -158,14 +200,14 @@ def find_and_replace_urls(caption: str, targets: List[str], replacement: str) ->
     
     # Also do direct string replacement for any remaining targets
     for target in targets_sorted:
-        if target in new_caption:
-            count = new_caption.count(target)
+        if target in new_text:
+            count = new_text.count(target)
             if count > 0:
-                new_caption = new_caption.replace(target, replacement)
+                new_text = new_text.replace(target, replacement)
                 replacements_count[target] = replacements_count.get(target, 0) + count
                 logger.info(f"Direct replacement: {target} -> {replacement} ({count} times)")
     
-    return new_caption, replacements_count
+    return new_text, replacements_count
 
 async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, str, Optional[Any]]:
     """Verify bot permissions"""
@@ -210,6 +252,21 @@ async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, st
         return False, f"❌ Missing: {', '.join(missing)}", chat
 
     return True, "✅ All permissions verified", chat
+
+async def edit_bot_message(client: Client, user_id: int, message_id: int, text: str):
+    """Safely edit bot message"""
+    try:
+        await client.edit_message_text(
+            chat_id=user_id,
+            message_id=message_id,
+            text=text
+        )
+        return True
+    except errors.MessageNotModified:
+        return True
+    except Exception as e:
+        logger.error(f"Failed to edit bot message: {e}")
+        return False
 
 @Client.on_message(filters.command("replace") & filters.private & filters.user(Config.ADMINS))
 async def replace_command(client: Client, message: Message):
@@ -491,23 +548,8 @@ async def handle_replacement(client: Client, message: Message, session: ReplaceS
     task = asyncio.create_task(run_replacement_task(client, job_data, bot_msg))
     ACTIVE_TASKS[session.user_id] = task
 
-async def edit_bot_message(client: Client, user_id: int, message_id: int, text: str):
-    """Safely edit bot message"""
-    try:
-        await client.edit_message_text(
-            chat_id=user_id,
-            message_id=message_id,
-            text=text
-        )
-        return True
-    except errors.MessageNotModified:
-        return True
-    except Exception as e:
-        logger.error(f"Failed to edit bot message: {e}")
-        return False
-
 async def run_replacement_task(client: Client, job_data: Dict, status_msg: Message):
-    """Run replacement task"""
+    """Run replacement task with full caption support"""
     
     user_id = job_data["user_id"]
     job_id = job_data["job_id"]
@@ -517,8 +559,36 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
     targets = job_data["targets"]
     replacement = job_data["replacement"]
 
+    # CRITICAL: Log job parameters
+    logger.info(f"🚀 Starting replace job {job_id}")
+    logger.info(f"📊 Chat ID: {chat_id}")
+    logger.info(f"📊 First ID: {first_id}")
+    logger.info(f"📊 Last ID: {last_id}")
+    logger.info(f"📊 Total messages: {last_id - first_id + 1}")
+    logger.info(f"📊 Targets: {targets}")
+    logger.info(f"📊 Replacement: {replacement}")
+
     stats = ReplacementStats()
     stats.total = last_id - first_id + 1
+
+    # DEBUG: Test first message
+    try:
+        test_msg = await client.get_messages(chat_id, first_id)
+        if test_msg:
+            logger.info(f"✅ Successfully fetched message {first_id}")
+            if test_msg.caption:
+                logger.info(f"📝 Caption preview: {test_msg.caption[:200]}...")
+                for target in targets:
+                    if target in test_msg.caption:
+                        logger.info(f"🎯 Found target '{target}' in message {first_id}")
+                    else:
+                        logger.warning(f"❌ Target '{target}' NOT found in message {first_id}")
+            else:
+                logger.warning(f"⚠️ Message {first_id} has NO caption")
+        else:
+            logger.error(f"❌ Failed to fetch message {first_id}")
+    except Exception as e:
+        logger.error(f"❌ Error fetching test message: {e}")
 
     # Progress update
     last_update_time = 0
@@ -544,6 +614,7 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
             f"✅ Edited: **{stats.edited:,}**\n"
             f"⏩ No Caption: **{stats.skipped_no_caption:,}**\n"
             f"⏩ No Target: **{stats.skipped_no_target:,}**\n"
+            f"⏩ Unchanged: **{stats.skipped_unchanged:,}**\n"
             f"❌ Failed: **{stats.failed:,}**\n"
             f"⚡ Speed: **{speed_str}**\n"
             f"⏰ ETA: **{eta}**\n\n"
@@ -581,6 +652,12 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
             # Get message
             try:
                 msg = await client.get_messages(chat_id, msg_id)
+                if not msg or msg.empty:
+                    stats.skipped_no_caption += 1
+                    stats.processed += 1
+                    logger.debug(f"Message {msg_id}: Empty or None")
+                    await update_progress()
+                    continue
             except errors.FloodWait as e:
                 await asyncio.sleep(e.value + 1)
                 msg = await client.get_messages(chat_id, msg_id)
@@ -588,43 +665,82 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
                 stats.failed += 1
                 stats.processed += 1
                 stats.error_reasons[msg_id] = str(e)
+                logger.error(f"Failed to fetch message {msg_id}: {e}")
                 await update_progress()
                 continue
 
-            if not msg or msg.empty:
-                stats.skipped_no_caption += 1
-                stats.processed += 1
-                await update_progress()
-                continue
-
-            # CRITICAL: Get CAPTION not text
+            # CRITICAL: Get CAPTION (not text)
             caption = msg.caption if hasattr(msg, 'caption') and msg.caption else None
             
             if not caption:
                 stats.skipped_no_caption += 1
                 stats.processed += 1
+                logger.debug(f"Message {msg_id}: No caption")
                 await update_progress()
                 continue
 
-            # Log caption for debugging
-            logger.info(f"Processing message {msg_id}: Caption length {len(caption)}")
-            logger.debug(f"Caption preview: {caption[:200]}...")
+            # Log caption for debugging (first 5 messages only)
+            if stats.processed < 5:
+                logger.info(f"=== Message {msg_id} ===")
+                logger.info(f"Caption: {caption[:200]}...")
+                logger.info(f"Targets to check: {targets}")
 
-            # Find and replace URLs
-            new_caption, replacements = find_and_replace_urls(caption, targets, replacement)
+            # CHECK FOR TARGETS IN CAPTION
+            has_target = False
+            matched_targets = []
+            caption_lower = caption.lower()
             
-            # Also do direct replacement for any remaining targets
+            for target in targets:
+                target_lower = target.lower()
+                
+                # Direct check
+                if target_lower in caption_lower:
+                    has_target = True
+                    matched_targets.append(target)
+                    logger.info(f"✅ Found target '{target}' in message {msg_id}")
+                    continue
+                
+                # Check if target is a URL that exists in caption
+                if target.startswith(('http://', 'https://')):
+                    # Extract all URLs from caption
+                    urls = extract_urls_from_text(caption)
+                    for url, _, _ in urls:
+                        url_normalized = normalize_url(url)
+                        target_normalized = normalize_url(target)
+                        if target_normalized in url_normalized or url_normalized in target_normalized:
+                            has_target = True
+                            matched_targets.append(target)
+                            logger.info(f"✅ Found URL target '{target}' in message {msg_id}")
+                            break
+                if has_target:
+                    break
+
+            if not has_target:
+                stats.skipped_no_target += 1
+                stats.processed += 1
+                logger.debug(f"Message {msg_id}: No target found")
+                await update_progress()
+                continue
+
+            # PERFORM REPLACEMENTS
+            new_caption = caption
+            
+            # First, replace URLs
+            new_caption, url_replacements = replace_urls_in_text(new_caption, targets, replacement)
+            
+            # Then do direct replacements for any remaining targets
             for target in targets:
                 if target in new_caption:
                     count = new_caption.count(target)
                     if count > 0:
                         new_caption = new_caption.replace(target, replacement)
-                        replacements[target] = replacements.get(target, 0) + count
+                        logger.info(f"Direct replacement: {target} -> {replacement} ({count} times) in message {msg_id}")
 
             # Check if anything changed
             if new_caption == caption:
-                stats.skipped_no_target += 1
+                stats.skipped_unchanged += 1
                 stats.processed += 1
+                logger.debug(f"Message {msg_id}: No changes needed")
                 await update_progress()
                 continue
 
@@ -640,11 +756,7 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
                     )
                     stats.edited += 1
                     stats.processed += 1
-                    stats.replacements_made.update(replacements)
-                    
-                    # Log success
-                    total_replacements = sum(replacements.values())
-                    logger.info(f"✅ Edited message {msg_id}: {total_replacements} replacements made")
+                    logger.info(f"✅ Successfully edited message {msg_id}")
                     break
                     
                 except errors.FloodWait as e:
@@ -655,12 +767,14 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
                 except errors.MessageNotModified:
                     stats.skipped_unchanged += 1
                     stats.processed += 1
+                    logger.debug(f"Message {msg_id}: Not modified")
                     break
                     
                 except errors.MessageIdInvalid:
                     stats.failed += 1
                     stats.processed += 1
                     stats.error_reasons[msg_id] = "Invalid message ID"
+                    logger.error(f"Message {msg_id}: Invalid ID")
                     break
                     
                 except Exception as e:
@@ -710,8 +824,7 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
                 "skipped_no_target": stats.skipped_no_target,
                 "skipped_unchanged": stats.skipped_unchanged,
                 "failed": stats.failed
-            },
-            "replacements": stats.replacements_made
+            }
         }}
     )
     
@@ -742,15 +855,13 @@ async def update_completion_status(client: Client, status_msg: Message, stats: R
         f"━━━━━━━━━━━━━━"
     )
     
-    # Add replacement statistics
-    if stats.replacements_made:
-        completion_text += "\n\n🔄 **Replacements Made:**\n"
-        for target, count in sorted(stats.replacements_made.items(), key=lambda x: x[1], reverse=True)[:10]:
-            display_target = target[:40] + "..." if len(target) > 40 else target
-            completion_text += f"• `{display_target}`: {count} times\n"
-    
     if stats.error_reasons:
-        completion_text += f"\n❌ **Errors:** {len(stats.error_reasons)} messages failed"
+        completion_text += f"\n\n❌ **Errors:** {len(stats.error_reasons)} messages failed"
+        error_sample = list(stats.error_reasons.items())[:5]
+        for msg_id, error in error_sample:
+            completion_text += f"\n• Msg {msg_id}: `{error[:50]}`"
+        if len(stats.error_reasons) > 5:
+            completion_text += f"\n• ... and {len(stats.error_reasons) - 5} more errors"
     
     try:
         await client.edit_message_text(
@@ -769,13 +880,28 @@ async def status_command(client: Client, message: Message):
     if user_id in ACTIVE_TASKS:
         job = await db.replace_jobs.find_one({"user_id": user_id, "status": "running"})
         if job:
-            stats = job.get("stats", {})
             return await message.reply_text(
                 f"📊 **Active Replace Task**\n\n"
                 f"• Channel: `{job.get('chat_title')}`\n"
-                f"• Processed: `{stats.get('processed', 0):,}`\n"
-                f"• Edited: `{stats.get('edited', 0):,}`\n"
-                f"• Failed: `{stats.get('failed', 0):,}`"
+                f"• Job ID: `{job.get('job_id')}`\n"
+                f"• Started: `{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(job.get('created_at', time.time())))}`"
             )
     
-    await message.reply_text("ℹ️ No active replace tasks found.")
+    # Check for completed jobs
+    completed = await db.replace_jobs.find_one(
+        {"user_id": user_id, "status": "completed"},
+        sort=[("end_time", -1)]
+    )
+    
+    if completed:
+        final_stats = completed.get("final_stats", {})
+        return await message.reply_text(
+            f"📊 **Last Completed Task**\n\n"
+            f"• Channel: `{completed.get('chat_title')}`\n"
+            f"• Processed: `{final_stats.get('processed', 0):,}`\n"
+            f"• Edited: `{final_stats.get('edited', 0):,}`\n"
+            f"• Failed: `{final_stats.get('failed', 0):,}`\n"
+            f"• Completed: `{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(completed.get('end_time', time.time())))}`"
+        )
+    
+    await message.reply_text("ℹ️ No replace tasks found.")
