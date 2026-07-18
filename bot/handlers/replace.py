@@ -2,8 +2,13 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime
+from typing import Optional, List, Dict, Set, Tuple, Any
+from dataclasses import dataclass, field
+from collections import deque
+
 from pyrogram import Client, filters, errors, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
 from bot.utils.replacer import replace_in_html, replace_in_buttons, render_message_to_html
@@ -12,81 +17,146 @@ from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
-# Registry for active asyncio tasks of running replace jobs
+# Registry for active asyncio tasks
 ACTIVE_TASKS = {}
 
-# Session inactivity timeout: 5 minutes (300 seconds)
-SESSION_TIMEOUT = 300
+# Session inactivity timeout: 10 minutes (600 seconds)
+SESSION_TIMEOUT = 600
 
+# Maximum concurrent edits per batch
+MAX_CONCURRENT_EDITS = 10
+
+# Batch size for fetching messages
+BATCH_SIZE = 100
+
+@dataclass
 class ReplaceSession:
-    def __init__(self, user_id, bot_message_id):
-        self.user_id = user_id
-        self.bot_message_id = bot_message_id
-        self.chat_id = None
-        self.chat_title = None
-        self.first_msg_id = None
-        self.last_msg_id = None
-        self.targets = []
-        self.replacement = None
-        self.last_activity = time.time()
-        self.timeout_task = None
+    """Session data for each admin's replace operation"""
+    user_id: int
+    bot_message_id: int
+    chat_id: Optional[int] = None
+    chat_title: Optional[str] = None
+    first_msg_id: Optional[int] = None
+    last_msg_id: Optional[int] = None
+    targets: List[str] = field(default_factory=list)
+    replacement: Optional[str] = None
+    step: int = 1  # 1: first link, 2: last link, 3: targets, 4: replacement
+    created_at: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.time)
+    timeout_task: Optional[asyncio.Task] = None
 
-# Global dictionary of active sessions in memory
-SESSIONS = {}
+class ReplacementStats:
+    """Statistics for replacement job"""
+    def __init__(self):
+        self.total = 0
+        self.processed = 0
+        self.edited = 0
+        self.skipped_no_caption = 0
+        self.skipped_no_target = 0
+        self.failed = 0
+        self.start_time = time.time()
+        self.end_time = None
+        self.error_reasons: Dict[int, str] = {}
+        self.speed_samples: deque = deque(maxlen=10)
+        
+    def get_speed(self) -> float:
+        """Calculate current processing speed"""
+        elapsed = time.time() - self.start_time
+        if elapsed == 0:
+            return 0
+        return self.processed / elapsed
+    
+    def get_remaining(self) -> int:
+        """Calculate remaining messages"""
+        return max(0, self.total - self.processed)
+    
+    def get_eta(self) -> str:
+        """Get estimated time remaining"""
+        speed = self.get_speed()
+        if speed == 0:
+            return "--:--"
+        remaining = self.get_remaining()
+        eta_seconds = int(remaining / speed)
+        return format_duration(eta_seconds)
+    
+    def get_progress_bar(self, width=15) -> str:
+        """Get progress bar string"""
+        if self.total == 0:
+            return "░" * width
+        percentage = (self.processed / self.total) * 100
+        filled = int(round((percentage / 100.0) * width))
+        filled = max(0, min(width, filled))
+        return "█" * filled + "░" * (width - filled)
+    
+    def get_percentage(self) -> int:
+        """Get completion percentage"""
+        if self.total == 0:
+            return 0
+        return int((self.processed / self.total) * 100)
 
-def get_progress_bar(percentage):
-    total_blocks = 15
-    filled_blocks = int(round((percentage / 100.0) * total_blocks))
-    filled_blocks = max(0, min(total_blocks, filled_blocks))
-    return "█" * filled_blocks + "░" * (total_blocks - filled_blocks)
+# Global sessions dictionary
+SESSIONS: Dict[int, ReplaceSession] = {}
 
-def format_duration(seconds):
+def format_duration(seconds: int) -> str:
+    """Format duration in HH:MM:SS format"""
     if seconds < 0:
         return "--:--"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
-def reset_session_timeout(client, user_id):
+def normalize_text(text: str) -> str:
+    """Normalize text for comparison while preserving original"""
+    if not text:
+        return text
+    # Remove zero-width characters and normalize whitespace
+    text = re.sub(r'[\u200b-\u200f\u2028-\u202e\u2060-\u206f\uFEFF]', '', text)
+    # Normalize line endings
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # Remove trailing spaces but keep internal structure
+    lines = [line.rstrip() for line in text.split('\n')]
+    return '\n'.join(lines)
+
+def normalize_target(target: str) -> str:
+    """Normalize replacement target for comparison"""
+    return normalize_text(destylize(target).lower())
+
+async def reset_session_timeout(client: Client, user_id: int):
+    """Reset inactivity timeout for session"""
+    if user_id not in SESSIONS:
+        return
+    
+    session = SESSIONS[user_id]
+    if session.timeout_task:
+        session.timeout_task.cancel()
+    
+    async def timeout_callback():
+        try:
+            await asyncio.sleep(SESSION_TIMEOUT)
+            if user_id in SESSIONS:
+                sess = SESSIONS[user_id]
+                try:
+                    await client.edit_message_text(
+                        chat_id=user_id,
+                        message_id=sess.bot_message_id,
+                        text="❌ **Session expired due to inactivity.**\nPlease start over with /replace."
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to edit timeout message: {e}")
+                SESSIONS.pop(user_id, None)
+                await db.reset_user(user_id)
+        except asyncio.CancelledError:
+            pass
+    
+    session.timeout_task = asyncio.create_task(timeout_callback())
+
+async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, str, Optional[Any]]:
     """
-    Resets the inactivity timeout for the user's replace session.
-    If the user is inactive for 5 minutes, the session is cancelled automatically.
-    """
-    if user_id in SESSIONS:
-        session = SESSIONS[user_id]
-        if session.timeout_task:
-            session.timeout_task.cancel()
-
-        async def timeout_callback():
-            try:
-                await asyncio.sleep(SESSION_TIMEOUT)
-                if user_id in SESSIONS:
-                    sess = SESSIONS[user_id]
-                    try:
-                        await client.edit_message_text(
-                            chat_id=user_id,
-                            message_id=sess.bot_message_id,
-                            text="❌ **Session expired due to inactivity.**\nPlease start over with /replace."
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to edit timeout message: {e}")
-
-                    SESSIONS.pop(user_id, None)
-                    await db.reset_user(user_id)
-            except asyncio.CancelledError:
-                pass
-
-        session.timeout_task = asyncio.create_task(timeout_callback())
-
-async def verify_bot_permissions(client, chat_id):
-    """
-    Completely rewritten admin verification.
-    Correctly verifies: Channel Owner, Anonymous Admin, Normal Admin, Supergroup Admin.
-    Verifies required permissions: can_edit_messages, can_delete_messages, can_manage_chat, can_post_messages (channels).
-    Never falsely reports 'Bot is not admin' if the Bot actually has Edit Messages permission.
+    Verify bot has required permissions.
+    Returns: (success, message, chat_object)
     """
     try:
         chat = await resolve_chat(client, chat_id)
@@ -94,11 +164,7 @@ async def verify_bot_permissions(client, chat_id):
         return False, f"❌ Failed to resolve chat: {e}", None
 
     is_channel = chat.type == enums.ChatType.CHANNEL
-    is_group = chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
-
-    if not is_channel and not is_group:
-        return False, "❌ Text replacement is only supported in Channels or Supergroups/Groups.", chat
-
+    
     try:
         member = await chat.get_member("me")
     except errors.UserNotParticipant:
@@ -106,10 +172,11 @@ async def verify_bot_permissions(client, chat_id):
     except Exception as e:
         return False, f"❌ Failed to verify bot membership: {e}", chat
 
-    # If Bot is Owner, it has full permissions
+    # Bot is owner - has full permissions
     if member.status == enums.ChatMemberStatus.OWNER:
-        return True, chat, chat
+        return True, "✅ Bot is channel owner", chat
 
+    # Bot must be administrator
     if member.status != enums.ChatMemberStatus.ADMINISTRATOR:
         return False, "❌ Bot is not an admin in this chat.", chat
 
@@ -118,57 +185,91 @@ async def verify_bot_permissions(client, chat_id):
         return False, "❌ Bot is an admin but has no privileges.", chat
 
     missing = []
-    # In Pyrogram/Telegram API, can_edit_messages and can_post_messages are required for channels
+    
+    # Check required permissions
     if is_channel:
+        # For channels, need can_post_messages AND can_edit_messages
         if not getattr(privileges, "can_post_messages", False):
-            missing.append("can_post_messages")
+            missing.append("can_post_messages (required for channels)")
         if not getattr(privileges, "can_edit_messages", False):
-            missing.append("can_edit_messages")
+            missing.append("can_edit_messages (required for channels)")
+    else:
+        # For groups, need can_manage_chat
+        if not getattr(privileges, "can_manage_chat", False):
+            missing.append("can_manage_chat")
 
-    # can_manage_chat is required for robust administration
-    if not getattr(privileges, "can_manage_chat", False):
-        missing.append("can_manage_chat")
+    # Also check can_edit_messages for groups
+    if not getattr(privileges, "can_edit_messages", False):
+        missing.append("can_edit_messages")
 
     if missing:
         missing_str = ", ".join(f"`{p}`" for p in missing)
         return False, f"❌ Bot is admin but missing required permission(s): {missing_str}", chat
 
-    return True, chat, chat
+    return True, "✅ Bot has all required permissions", chat
 
+async def edit_bot_message(client: Client, user_id: int, message_id: int, text: str):
+    """Safely edit bot message with error handling"""
+    try:
+        await client.edit_message_text(
+            chat_id=user_id,
+            message_id=message_id,
+            text=text
+        )
+        return True
+    except errors.MessageNotModified:
+        return True  # Already same text
+    except Exception as e:
+        logger.error(f"Failed to edit bot message: {e}")
+        return False
 
 @Client.on_message(filters.command("replace") & filters.private & filters.user(Config.ADMINS))
-async def replace_command(client, message):
+async def replace_command(client: Client, message: Message):
+    """Start replacement workflow"""
     user_id = message.from_user.id
 
     # Cancel previous task if running
     if user_id in ACTIVE_TASKS:
-        return await message.reply_text("❌ A replacement task is already running! Type /cancel to stop it first.")
+        return await message.reply_text(
+            "❌ A replacement task is already running!\n"
+            "Type /cancel to stop it first."
+        )
 
+    # Clear any existing session
+    if user_id in SESSIONS:
+        session = SESSIONS[user_id]
+        if session.timeout_task:
+            session.timeout_task.cancel()
+        SESSIONS.pop(user_id, None)
+    
     await db.reset_user(user_id)
 
-    # Step 1/4 layout and phrasing
+    # Step 1: Send first message link
     welcome_text = (
-        "🔄 **Replace Wizard Started**\n\n"
-        "Step 1/4:\n"
-        "📩 Send the FIRST message link.\n\n"
+        "🛠️ **Caption Replace Tool**\n\n"
+        "📌 **Step 1/4:** Send the **FIRST** Telegram message link.\n\n"
         "Example:\n"
         "https://t.me/channel/100\n\n"
         "Type /cancel anytime to exit."
     )
+    
     bot_msg = await message.reply_text(welcome_text)
 
-    # Initialize session in memory
-    session = ReplaceSession(user_id, bot_msg.id)
+    # Initialize session
+    session = ReplaceSession(
+        user_id=user_id,
+        bot_message_id=bot_msg.id
+    )
     SESSIONS[user_id] = session
     await db.update_user_state(user_id, "awaiting_replace_first_link")
-    reset_session_timeout(client, user_id)
-
+    await reset_session_timeout(client, user_id)
 
 @Client.on_message(filters.command("cancel") & filters.private & filters.user(Config.ADMINS))
-async def cancel_replace_command(client, message):
+async def cancel_replace_command(client: Client, message: Message):
+    """Cancel replacement wizard or running task"""
     user_id = message.from_user.id
 
-    # 1. Cancel Active Wizard Session
+    # 1. Cancel active wizard session
     if user_id in SESSIONS:
         session = SESSIONS[user_id]
         if session.timeout_task:
@@ -185,60 +286,60 @@ async def cancel_replace_command(client, message):
             logger.warning(f"Failed to edit cancel message: {e}")
         return await message.reply_text("🛑 **Wizard setup has been cancelled.**")
 
-    # 2. Cancel Running background task
+    # 2. Cancel running background task
     if user_id in ACTIVE_TASKS:
         task = ACTIVE_TASKS[user_id]
         task.cancel()
-        return await message.reply_text("🛑 **Replacement task is stopping immediately...**")
+        try:
+            await message.reply_text("🛑 **Replacement task is stopping...**")
+        except:
+            pass
+        return
 
-    # Let propagation continue for other cancels if any
-    message.continue_propagation()
+    await message.reply_text("ℹ️ No active replace task or wizard found.")
 
-
-@Client.on_message(filters.command("status") & filters.private & filters.user(Config.ADMINS))
-async def status_replace_command(client, message):
+@Client.on_message(filters.command("done") & filters.private & filters.user(Config.ADMINS))
+async def done_replace_command(client: Client, message: Message):
+    """Finish adding targets and move to replacement step"""
     user_id = message.from_user.id
-    job = await db.replace_jobs.find_one({"user_id": user_id, "status": "running"})
-    if not job:
-        return await message.reply_text("❌ No active replace task running currently.")
+    session = SESSIONS.get(user_id)
+    
+    if not session:
+        return await message.reply_text("❌ No active replace session found.")
 
-    await message.reply_text(
-        f"📊 **Running Replace Task Status**\n\n"
-        f"• **Channel:** `{job.get('chat_title')}`\n"
-        f"• **Scanned:** `{job.get('total_scanned')}`\n"
-        f"• **Edited:** `{job.get('total_edited')}`\n"
-        f"• **Failed:** `{job.get('failed_count')}`"
+    state = await db.get_user_state(user_id)
+    if state != "awaiting_replace_targets":
+        return
+
+    # Delete `/done` user message
+    try:
+        await message.delete()
+    except:
+        pass
+
+    if not session.targets:
+        await edit_bot_message(
+            client, user_id, session.bot_message_id,
+            "❌ **Please add at least one replacement target first!**\n\n"
+            "Send text, URLs, emojis, or any string to replace."
+        )
+        return
+
+    await db.update_user_state(user_id, "awaiting_replace_with")
+    await reset_session_timeout(client, user_id)
+
+    await edit_bot_message(
+        client, user_id, session.bot_message_id,
+        "✨ **Step 4/4:** Send the replacement text.\n\n"
+        "Example:\n"
+        "https://anizoneflix-u00w.onrender.com"
     )
 
-
-@Client.on_message(filters.command("resume") & filters.private & filters.user(Config.ADMINS))
-async def resume_replace_command(client, message):
-    user_id = message.from_user.id
-    if user_id in ACTIVE_TASKS:
-        return await message.reply_text("❌ A replacement task is already running!")
-
-    job = await db.replace_jobs.find_one({
-        "user_id": user_id,
-        "status": {"$in": ["paused", "cancelled", "failed"]}
-    })
-
-    if not job:
-        return await message.reply_text("❌ No unfinished replace tasks found to resume.")
-
-    # Initialize a new status message for progress update
-    status_msg = await message.reply_text("🔄 **Resuming replacement task...**")
-
-    # Set status back to running in DB and memory
-    await db.replace_jobs.update_one({"user_id": user_id, "job_id": job["job_id"]}, {"$set": {"status": "running"}})
-    job["status"] = "running"
-
-    task = asyncio.create_task(run_replacement_task(client, job, status_msg))
-    ACTIVE_TASKS[user_id] = task
-    logger.info(f"Resumed replace job {job['job_id']} for user {user_id}")
-
-
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "sequence", "replace", "sort", "search", "cancel", "setchannel", "setbot", "reindex", "verify", "font", "fontchannel", "replace_domain", "b", "tedit", "tedit_status", "tedit_stop", "tedit_pause", "tedit_resume", "tedit_settings", "tedit_preview", "status", "resume", "done"]), group=3)
-async def handle_replace_workflow(client, message):
+@Client.on_message(filters.private & filters.text & ~filters.command([
+    "start", "replace", "cancel", "done", "status", "resume"
+]), group=3)
+async def handle_replace_workflow(client: Client, message: Message):
+    """Handle replacement workflow steps"""
     user_id = message.from_user.id
     session = SESSIONS.get(user_id)
 
@@ -251,293 +352,276 @@ async def handle_replace_workflow(client, message):
         message.continue_propagation()
         return
 
-    # Delete user's message immediately to keep the chat extremely clean and premium
+    # Delete user's message to keep chat clean
     try:
         await message.delete()
     except Exception as e:
         logger.warning(f"Failed to delete user message: {e}")
 
-    reset_session_timeout(client, user_id)
+    await reset_session_timeout(client, user_id)
 
     if state == "awaiting_replace_first_link":
-        chat_id, msg_id, _ = parse_message_link(message.text)
-        if not chat_id:
-            try:
-                await client.edit_message_text(
-                    chat_id=user_id,
-                    message_id=session.bot_message_id,
-                    text="❌ **Invalid Link!**\n\nPlease send a valid FIRST message link.\n\nExample:\nhttps://t.me/channel/100"
-                )
-            except: pass
-            return
-
-        success, err_msg, chat = await verify_bot_permissions(client, chat_id)
-        if not success:
-            try:
-                await client.edit_message_text(
-                    chat_id=user_id,
-                    message_id=session.bot_message_id,
-                    text=f"⚠️ **Permission Denied!**\n\n{err_msg}\n\nPlease fix permissions and start over."
-                )
-            except: pass
-            SESSIONS.pop(user_id, None)
-            await db.reset_user(user_id)
-            return
-
-        # Perform REPLACE_TEXT_CHANNELS check on numeric ID
-        if Config.REPLACE_TEXT_CHANNELS and chat.id not in Config.REPLACE_TEXT_CHANNELS:
-            try:
-                await client.edit_message_text(
-                    chat_id=user_id,
-                    message_id=session.bot_message_id,
-                    text="❌ **This channel is not authorized for text replacement.**"
-                )
-            except: pass
-            SESSIONS.pop(user_id, None)
-            await db.reset_user(user_id)
-            return
-
-        session.chat_id = chat.id
-        session.first_msg_id = msg_id
-        session.chat_title = chat.title
-
-        await db.update_user_state(user_id, "awaiting_replace_last_link")
-        try:
-            await client.edit_message_text(
-                chat_id=user_id,
-                message_id=session.bot_message_id,
-                text=(
-                    f"📩 Send the LAST message link.\n\n"
-                    f"Example:\n"
-                    f"https://t.me/channel/200"
-                )
-            )
-        except: pass
-
+        await handle_first_link(client, message, session)
+    
     elif state == "awaiting_replace_last_link":
-        chat_id, msg_id, _ = parse_message_link(message.text)
+        await handle_last_link(client, message, session)
+    
+    elif state == "awaiting_replace_targets":
+        await handle_target(client, message, session)
+    
+    elif state == "awaiting_replace_with":
+        await handle_replacement(client, message, session)
+
+async def handle_first_link(client: Client, message: Message, session: ReplaceSession):
+    """Handle first message link input"""
+    chat_id, msg_id, _ = parse_message_link(message.text)
+    
+    if not chat_id or not msg_id:
+        await edit_bot_message(
+            client, session.user_id, session.bot_message_id,
+            "❌ **Invalid Link!**\n\n"
+            "Please send a valid FIRST message link.\n\n"
+            "Example:\n"
+            "https://t.me/channel/100"
+        )
+        return
+
+    # Verify bot permissions
+    success, err_msg, chat = await verify_bot_permissions(client, chat_id)
+    if not success:
+        await edit_bot_message(
+            client, session.user_id, session.bot_message_id,
+            f"⚠️ **Permission Denied!**\n\n{err_msg}\n\n"
+            "Please fix permissions and start over with /replace."
+        )
+        SESSIONS.pop(session.user_id, None)
+        await db.reset_user(session.user_id)
+        return
+
+    # Check if channel is authorized
+    if Config.REPLACE_TEXT_CHANNELS and chat.id not in Config.REPLACE_TEXT_CHANNELS:
+        await edit_bot_message(
+            client, session.user_id, session.bot_message_id,
+            "❌ **This channel is not authorized for text replacement.**\n\n"
+            "Contact bot owner to authorize this channel."
+        )
+        SESSIONS.pop(session.user_id, None)
+        await db.reset_user(session.user_id)
+        return
+
+    session.chat_id = chat.id
+    session.first_msg_id = msg_id
+    session.chat_title = chat.title
+
+    await db.update_user_state(session.user_id, "awaiting_replace_last_link")
+    await edit_bot_message(
+        client, session.user_id, session.bot_message_id,
+        f"📌 **Step 2/4:** Send the **LAST** Telegram message link.\n\n"
+        f"Channel: `{chat.title}`\n"
+        f"First ID: `{msg_id}`\n\n"
+        "Example:\n"
+        "https://t.me/channel/500"
+    )
+
+async def handle_last_link(client: Client, message: Message, session: ReplaceSession):
+    """Handle last message link input"""
+    chat_id, msg_id, _ = parse_message_link(message.text)
+    
+    # Resolve chat ID to compare
+    try:
+        chat = await resolve_chat(client, chat_id)
+        resolved_chat_id = chat.id
+    except:
         resolved_chat_id = chat_id
-        if isinstance(chat_id, str) and not chat_id.startswith("@") and chat_id.lstrip("-").isdigit():
-            resolved_chat_id = int(chat_id)
 
+    if not chat_id or not msg_id or resolved_chat_id != session.chat_id:
+        await edit_bot_message(
+            client, session.user_id, session.bot_message_id,
+            f"❌ **Invalid Link!**\n\n"
+            f"Link must be from the same channel: `{session.chat_title}`\n\n"
+            f"📩 Send the LAST message link."
+        )
+        return
+
+    session.last_msg_id = msg_id
+
+    # Ensure correct order
+    if session.first_msg_id > session.last_msg_id:
+        session.first_msg_id, session.last_msg_id = session.last_msg_id, session.first_msg_id
+
+    await db.update_user_state(session.user_id, "awaiting_replace_targets")
+    
+    target_list = "\n".join([f"• {t}" for t in session.targets[-5:]]) if session.targets else "No targets added yet"
+    target_count = len(session.targets)
+    
+    await edit_bot_message(
+        client, session.user_id, session.bot_message_id,
+        f"📝 **Step 3/4:** Send everything you want to replace.\n\n"
+        f"Supported:\n"
+        f"• URLs\n"
+        f"• Words\n"
+        f"• Sentences\n"
+        f"• Emojis\n"
+        f"• HTML\n"
+        f"• Markdown\n"
+        f"• Any text\n\n"
+        f"You can send unlimited targets.\n\n"
+        f"Current targets: {target_count}\n"
+        f"{target_list if target_count > 0 else 'No targets added yet'}\n\n"
+        f"Continue sending targets.\n"
+        f"When finished send: /done"
+    )
+
+async def handle_target(client: Client, message: Message, session: ReplaceSession):
+    """Handle replacement target input"""
+    item = message.text.strip()
+    
+    if not item:
+        return
+    
+    # Check for duplicates
+    if item not in session.targets:
+        session.targets.append(item)
+    
+    target_list = "\n".join([f"• {t}" for t in session.targets[-10:]])
+    target_count = len(session.targets)
+    
+    await edit_bot_message(
+        client, session.user_id, session.bot_message_id,
+        f"📝 **Step 3/4:** Send everything you want to replace.\n\n"
+        f"✅ Added: `{item}`\n\n"
+        f"Current targets: {target_count}\n"
+        f"{target_list}\n\n"
+        f"Continue sending targets.\n"
+        f"When finished send: /done"
+    )
+
+async def handle_replacement(client: Client, message: Message, session: ReplaceSession):
+    """Handle replacement text and start processing"""
+    session.replacement = message.text.strip()
+    
+    if not session.replacement:
+        await edit_bot_message(
+            client, session.user_id, session.bot_message_id,
+            "❌ **Replacement text cannot be empty!**\n\n"
+            "Please send the replacement text."
+        )
+        return
+
+    # Start processing
+    await edit_bot_message(
+        client, session.user_id, session.bot_message_id,
+        "🔍 **Validating...**\n"
+        "📂 **Reading messages...**\n"
+        "📝 **Searching captions...**\n"
+        "⚡ **Starting replacement...**\n\n"
+        "Please wait..."
+    )
+
+    # Create job data
+    job_id = f"replace_{int(time.time())}"
+    job_data = {
+        "job_id": job_id,
+        "user_id": session.user_id,
+        "chat_id": session.chat_id,
+        "chat_title": session.chat_title,
+        "first_id": session.first_msg_id,
+        "last_id": session.last_msg_id,
+        "targets": session.targets.copy(),
+        "replacement": session.replacement,
+        "status": "running",
+        "created_at": time.time()
+    }
+
+    # Save to database
+    await db.replace_jobs.update_one(
+        {"user_id": session.user_id},
+        {"$set": job_data},
+        upsert=True
+    )
+
+    # Clear session
+    if session.timeout_task:
+        session.timeout_task.cancel()
+    SESSIONS.pop(session.user_id, None)
+    await db.reset_user(session.user_id)
+
+    # Get bot message for updates
+    bot_msg = await client.get_messages(session.user_id, session.bot_message_id)
+    if not bot_msg:
+        # Create new status message if original was deleted
+        bot_msg = await client.send_message(
+            session.user_id,
+            "🔄 **Starting replacement...**"
+        )
+
+    # Start replacement task
+    task = asyncio.create_task(run_replacement_task(client, job_data, bot_msg))
+    ACTIVE_TASKS[session.user_id] = task
+
+async def run_replacement_task(client: Client, job_data: Dict, status_msg: Message):
+    """Run replacement task with full caption support"""
+    user_id = job_data["user_id"]
+    job_id = job_data["job_id"]
+    chat_id = job_data["chat_id"]
+    first_id = job_data["first_id"]
+    last_id = job_data["last_id"]
+    targets = job_data["targets"]
+    replacement = job_data["replacement"]
+
+    stats = ReplacementStats()
+    stats.total = last_id - first_id + 1
+    stats.start_time = time.time()
+
+    # Normalize targets for efficient matching
+    normalized_targets = [(target, normalize_target(target)) for target in targets]
+    normalized_replacement = normalize_target(replacement)
+
+    # Progress update interval
+    last_update_time = 0
+    update_interval = 3.0  # seconds
+
+    # Ensure status_msg exists
+    if not status_msg:
         try:
-            resolved_target = await resolve_chat(client, chat_id)
-            resolved_chat_id = resolved_target.id
+            status_msg = await client.send_message(
+                user_id,
+                "🔄 **Starting replacement...**"
+            )
         except:
-            pass
-
-        if not chat_id or resolved_chat_id != session.chat_id:
-            try:
-                await client.edit_message_text(
-                    chat_id=user_id,
-                    message_id=session.bot_message_id,
-                    text=(
-                        f"❌ **Invalid Link!** Link must be from the same channel: `{session.chat_title}`.\n\n"
-                        f"📩 Send the LAST message link."
-                    )
-                )
-            except: pass
+            logger.error(f"Failed to send status message for user {user_id}")
             return
 
-        session.last_msg_id = msg_id
-
-        await db.update_user_state(user_id, "awaiting_replace_targets")
-        try:
-            await client.edit_message_text(
-                chat_id=user_id,
-                message_id=session.bot_message_id,
-                text=(
-                    f"🔍 What should I replace?\n\n"
-                    f"You can send:\n"
-                    f"• Text\n"
-                    f"• URLs\n"
-                    f"• Words\n"
-                    f"• Emojis\n"
-                    f"• Mentions\n"
-                    f"• Domains\n"
-                    f"• Any string\n\n"
-                    f"You may send unlimited replacement targets.\n\n"
-                    f"Example:\n"
-                    f"https://anizoneflixback.onrender.com\n"
-                    f"old-domain.com\n"
-                    f"AnimeZone\n"
-                    f"@OldChannel\n\n"
-                    f"Every new message is added to the replacement list."
-                )
-            )
-        except: pass
-
-    elif state == "awaiting_replace_targets":
-        item = message.text.strip()
-        if item not in session.targets:
-            session.targets.append(item)
-
-        # Update the single interactive message with exact format
-        try:
-            await client.edit_message_text(
-                chat_id=user_id,
-                message_id=session.bot_message_id,
-                text=(
-                    f"✅ Added:\n"
-                    f"{item}\n\n"
-                    f"Current Items: {len(session.targets)}\n\n"
-                    f"Continue sending more items or type /done when finished."
-                )
-            )
-        except: pass
-
-    elif state == "awaiting_replace_with":
-        session.replacement = message.text.strip()
-
-        # Update message to Step 5 (Loading/Checking state)
-        try:
-            await client.edit_message_text(
-                chat_id=user_id,
-                message_id=session.bot_message_id,
-                text=(
-                    "🔍 Checking permissions...\n"
-                    "📂 Fetching messages...\n"
-                    "📝 Replacing captions...\n"
-                    "⏳ Please wait..."
-                )
-            )
-        except: pass
-
-        # Prepare job details
-        job_id = f"replace_{int(time.time())}"
-        job_data = {
-            "job_id": job_id,
-            "user_id": user_id,
-            "chat_id": session.chat_id,
-            "chat_title": session.chat_title,
-            "first_id": min(session.first_msg_id, session.last_msg_id),
-            "last_id": max(session.first_msg_id, session.last_msg_id),
-            "current_id": min(session.first_msg_id, session.last_msg_id),
-            "targets": session.targets,
-            "replacement": session.replacement,
-            "status": "running",
-            "total_scanned": 0,
-            "total_edited": 0,
-            "skipped": 0,
-            "failed_count": 0,
-            "error_reasons": {},
-            "start_time": time.time(),
-            "end_time": None
-        }
-
-        # Save to DB
-        await db.replace_jobs.update_one({"user_id": user_id}, {"$set": job_data}, upsert=True)
-
-        # Clear session timeout and session object from wizard memory
-        if session.timeout_task:
-            session.timeout_task.cancel()
-        SESSIONS.pop(user_id, None)
-        await db.reset_user(user_id)
-
-        # Start replacement background task
-        bot_msg_copy = await client.get_messages(user_id, session.bot_message_id)
-        task = asyncio.create_task(run_replacement_task(client, job_data, bot_msg_copy))
-        ACTIVE_TASKS[user_id] = task
-
-
-@Client.on_message(filters.command("done") & filters.private & filters.user(Config.ADMINS))
-async def done_replace_command(client, message):
-    user_id = message.from_user.id
-    session = SESSIONS.get(user_id)
-    if not session:
-        return
-
-    # Check MongoDB user state to verify we are actually in the targets stage
-    state = await db.get_user_state(user_id)
-    if state != "awaiting_replace_targets":
-        return
-
-    # Delete `/done` user message
-    try:
-        await message.delete()
-    except: pass
-
-    if not session.targets:
-        try:
-            await client.edit_message_text(
-                chat_id=user_id,
-                message_id=session.bot_message_id,
-                text=(
-                    "❌ **Please add at least one replacement target first!**\n\n"
-                    "🔍 What should I replace?"
-                )
-            )
-        except: pass
-        return
-
-    await db.update_user_state(user_id, "awaiting_replace_with")
-    reset_session_timeout(client, user_id)
-
-    try:
-        await client.edit_message_text(
-            chat_id=user_id,
-            message_id=session.bot_message_id,
-            text=(
-                "✨ Replace all selected items WITH:\n\n"
-                "Example:\n"
-                "https://anizoneflix-u00w.onrender.com"
-            )
-        )
-    except: pass
-
-
-async def run_replacement_task(client, job, status_msg):
-    user_id = job["user_id"]
-    job_id = job["job_id"]
-    chat_id = job["chat_id"]
-    first_id = job["first_id"]
-    last_id = job["last_id"]
-    targets = job["targets"]
-    replacement = job["replacement"]
-
-    # Destylize all targets to ensure stylized mathematical characters match perfectly
-    targets_destylized = [destylize(t) for t in targets]
-
-    # Initialize statistics
-    total = last_id - first_id + 1
-    processed = job.get("total_scanned", 0)
-    edited = job.get("total_edited", 0)
-    skipped = job.get("skipped", 0)
-    failed = job.get("failed_count", 0)
-    error_reasons = job.get("error_reasons", {})
-
-    start_time = job.get("start_time") or time.time()
-    current_id = job.get("current_id") or first_id
-
-    # Periodic progress updater to avoid spamming the Telegram servers
-    last_update_time = 0
-
-    async def update_progress_msg(force=False):
+    async def update_progress(force: bool = False):
+        """Update progress message"""
         nonlocal last_update_time
         now = time.time()
-        if not force and (now - last_update_time < 2.5):
+        
+        if not force and (now - last_update_time) < update_interval:
             return
-
-        elapsed = int(now - start_time)
-        percentage = (processed / total) * 100 if total > 0 else 0
-        speed = processed / elapsed if elapsed > 0 else 0
-        remaining_seconds = int((total - processed) / speed) if speed > 0 else -1
-
-        progress_bar = get_progress_bar(percentage)
+        
+        elapsed = int(now - stats.start_time)
+        progress_bar = stats.get_progress_bar()
+        percentage = stats.get_percentage()
+        speed = stats.get_speed()
         speed_str = f"{int(speed)} msg/sec" if speed > 0 else "0 msg/sec"
-        remaining_str = format_duration(remaining_seconds) if remaining_seconds >= 0 else "--:--"
+        remaining = stats.get_remaining()
+        eta = stats.get_eta()
 
         progress_text = (
-            "🔄 Replace Wizard\n\n"
-            f"{progress_bar} {int(percentage)}%\n\n"
-            f"Processed:\n{processed} / {total}\n\n"
-            f"Edited:\n{edited}\n\n"
-            f"Skipped:\n{skipped}\n\n"
-            f"Errors:\n{failed}\n\n"
-            f"Speed:\n{speed_str}\n\n"
-            f"Elapsed:\n{format_duration(elapsed)}\n\n"
-            f"Remaining:\n{remaining_str}"
+            "🔄 **Caption Replacement**\n\n"
+            f"{progress_bar} **{percentage}%**\n\n"
+            f"📂 Total: **{stats.total}**\n"
+            f"✅ Edited: **{stats.edited}**\n"
+            f"⏩ Skipped (No Caption): **{stats.skipped_no_caption}**\n"
+            f"⏩ Skipped (No Target): **{stats.skipped_no_target}**\n"
+            f"❌ Failed: **{stats.failed}**\n"
+            f"⚡ Speed: **{speed_str}**\n"
+            f"⏳ Remaining: **{remaining}**\n"
+            f"⏰ ETA: **{eta}**\n\n"
+            f"🔍 Processed: **{stats.processed}/{stats.total}**"
         )
+        
         try:
             await client.edit_message_text(
                 chat_id=status_msg.chat.id,
@@ -548,222 +632,308 @@ async def run_replacement_task(client, job, status_msg):
         except errors.MessageNotModified:
             pass
         except errors.FloodWait as e:
-            # Sleep if we trigger FloodWait on status message itself
             await asyncio.sleep(e.value + 1)
         except Exception as e:
-            logger.error(f"Error editing progress message: {e}")
+            logger.error(f"Failed to update progress: {e}")
 
-    # Re-verify permissions before launching task
-    success, err_msg, _ = await verify_bot_permissions(client, chat_id)
-    if not success:
+    # First progress update
+    await update_progress(force=True)
+
+    # Process messages in batches
+    for batch_start in range(first_id, last_id + 1, BATCH_SIZE):
+        # Check for cancellation
+        job = await db.replace_jobs.find_one({"user_id": user_id, "job_id": job_id})
+        if not job or job.get("status") == "cancelled":
+            logger.info(f"Replace task {job_id} cancelled")
+            await update_completion_status(client, status_msg, stats, "cancelled")
+            return
+
+        batch_end = min(batch_start + BATCH_SIZE - 1, last_id)
+        batch_ids = list(range(batch_start, batch_end + 1))
+
         try:
-            await client.edit_message_text(
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.id,
-                text=f"❌ **Permission Verification Failed:**\n\n{err_msg}"
-            )
-        except: pass
-        await db.replace_jobs.update_one({"user_id": user_id, "job_id": job_id}, {"$set": {"status": "failed"}})
-        ACTIVE_TASKS.pop(user_id, None)
-        return
-
-    logger.info(f"Starting replacement background job {job_id} for user {user_id}. Range: {current_id} to {last_id}")
-
-    try:
-        # Fetch and process in batches of 100
-        for i in range(current_id, last_id + 1, 100):
-            # Check for cancellation
-            job_status = await db.replace_jobs.find_one({"user_id": user_id, "job_id": job_id})
-            if not job_status or job_status.get("status") == "cancelled":
-                logger.info(f"Replace task {job_id} cancelled.")
-                break
-
-            batch_ids = list(range(i, min(i + 100, last_id + 1)))
-            try:
-                messages = await client.get_messages(chat_id, batch_ids)
-            except errors.FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-                messages = await client.get_messages(chat_id, batch_ids)
-            except Exception as e:
-                logger.error(f"Failed to fetch batch {batch_ids}: {e}")
-                failed += len(batch_ids)
-                processed += len(batch_ids)
-                continue
-
-            if not isinstance(messages, list):
-                messages = [messages]
-
-            # Setup locks and semaphore for controlled concurrent edits
-            lock = asyncio.Lock()
-            stats_dict = {
-                "edited": 0,
-                "skipped": 0,
-                "failed": 0,
-                "errors": {}
-            }
-            sem = asyncio.Semaphore(5)
-
-            async def process_single_message(msg):
-                if not msg or msg.empty:
-                    async with lock:
-                        stats_dict["skipped"] += 1
-                    return
-
-                # Get HTML with entities preserved (safely handles both text messages and captions!)
-                if msg.text:
-                    current_html = render_message_to_html(msg.text, msg.entities)
-                elif msg.caption:
-                    current_html = render_message_to_html(msg.caption, msg.caption_entities)
-                else:
-                    async with lock:
-                        stats_dict["skipped"] += 1
-                    return
-
-                # Detect if any target matches in a stylization-safe manner
-                has_match = False
-                current_html_destylized = destylize(current_html)
-                for target in targets_destylized:
-                    if target.lower() in current_html_destylized.lower():
-                        has_match = True
-                        break
-                    if msg.reply_markup and target.lower() in destylize(str(msg.reply_markup)).lower():
-                        has_match = True
-                        break
-
-                if not has_match:
-                    async with lock:
-                        stats_dict["skipped"] += 1
-                    return
-
-                # Perform safe HTML and Button replacement using our robust helper functions
-                new_html = current_html
-                for target in targets:
-                    new_html = replace_in_html(new_html, target, replacement)
-
-                new_reply_markup = None
-                if msg.reply_markup:
-                    new_reply_markup = msg.reply_markup
-                    for target in targets:
-                        new_reply_markup = replace_in_buttons(new_reply_markup, target, replacement)
-
-                # Edit message if anything changed
-                if new_html != current_html or (msg.reply_markup and new_reply_markup != msg.reply_markup):
-                    async with sem:
-                        success_edit = False
-                        for attempt in range(3):
-                            try:
-                                if msg.text:
-                                    await client.edit_message_text(
-                                        chat_id, msg.id, new_html,
-                                        parse_mode=enums.ParseMode.HTML,
-                                        reply_markup=new_reply_markup
-                                    )
-                                else:
-                                    invert = getattr(msg, "invert_media", False)
-                                    await client.edit_message_caption(
-                                        chat_id, msg.id, new_html,
-                                        parse_mode=enums.ParseMode.HTML,
-                                        reply_markup=new_reply_markup,
-                                        invert_media=invert
-                                    )
-                                success_edit = True
-                                async with lock:
-                                    stats_dict["edited"] += 1
-                                break
-                            except errors.FloodWait as e:
-                                await asyncio.sleep(e.value + 1)
-                            except errors.MessageNotModified:
-                                success_edit = True
-                                async with lock:
-                                    stats_dict["skipped"] += 1
-                                break
-                            except Exception as e:
-                                logger.error(f"Failed to edit message {msg.id} (attempt {attempt}): {e}")
-                                if attempt == 2:
-                                    async with lock:
-                                        stats_dict["failed"] += 1
-                                        stats_dict["errors"][str(msg.id)] = str(e)
-                                await asyncio.sleep(1)
-                else:
-                    async with lock:
-                        stats_dict["skipped"] += 1
-
-            # Execute concurrent edits for this batch
-            await asyncio.gather(*(process_single_message(m) for m in messages))
-
-            # Merge stats
-            processed += len(batch_ids)
-            edited += stats_dict["edited"]
-            skipped += stats_dict["skipped"]
-            failed += stats_dict["failed"]
-            error_reasons.update(stats_dict["errors"])
-
-            # Save state progress in DB
-            current_id = i + len(batch_ids)
-            await db.replace_jobs.update_one({"user_id": user_id, "job_id": job_id}, {"$set": {
-                "total_scanned": processed,
-                "total_edited": edited,
-                "skipped": skipped,
-                "failed_count": failed,
-                "error_reasons": error_reasons,
-                "current_id": current_id
-            }})
-
-            # Live Progress update
-            await update_progress_msg()
-
-            # Rate limit defense
-            await asyncio.sleep(0.5)
-
-        # Completion handling
-        elapsed = int(time.time() - start_time)
-        completion_text = (
-            "✅ Replacement Completed\n\n"
-            "Messages Processed:\n"
-            f"{processed}\n\n"
-            "Messages Edited:\n"
-            f"{edited}\n\n"
-            "Skipped:\n"
-            f"{skipped}\n\n"
-            "Failed:\n"
-            f"{failed}\n\n"
-            "Time Taken:\n"
-            f"{elapsed} seconds"
-        )
-        try:
-            await client.edit_message_text(
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.id,
-                text=completion_text
-            )
+            messages = await client.get_messages(chat_id, batch_ids)
+        except errors.FloodWait as e:
+            logger.warning(f"Flood wait {e.value}s for batch {batch_start}")
+            await asyncio.sleep(e.value + 1)
+            messages = await client.get_messages(chat_id, batch_ids)
         except Exception as e:
-            logger.error(f"Failed to edit completion message: {e}")
+            logger.error(f"Failed to fetch batch {batch_start}: {e}")
+            stats.failed += len(batch_ids)
+            stats.processed += len(batch_ids)
+            continue
 
-        # Update Job Status to completed
-        await db.replace_jobs.update_one({"user_id": user_id, "job_id": job_id}, {"$set": {
+        if not isinstance(messages, list):
+            messages = [messages]
+
+        # Process messages with semaphore for concurrency control
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_EDITS)
+        
+        async def process_message(msg):
+            if not msg or msg.empty:
+                stats.skipped_no_caption += 1
+                return
+
+            # Get caption (NOT text)
+            caption = msg.caption if hasattr(msg, 'caption') and msg.caption else None
+            
+            if not caption:
+                stats.skipped_no_caption += 1
+                return
+
+            # Check for targets (use normalized comparison)
+            has_match = False
+            caption_normalized = normalize_text(caption)
+            
+            for target, target_normalized in normalized_targets:
+                if target_normalized in caption_normalized:
+                    has_match = True
+                    break
+                
+                # Also check in caption entities (URLs, etc.)
+                if msg.caption_entities:
+                    for entity in msg.caption_entities:
+                        if entity.type in [enums.MessageEntityType.URL, enums.MessageEntityType.TEXT_LINK]:
+                            entity_text = caption[entity.offset:entity.offset + entity.length]
+                            if target_normalized in normalize_text(entity_text):
+                                has_match = True
+                                break
+                    if has_match:
+                        break
+
+            if not has_match:
+                stats.skipped_no_target += 1
+                return
+
+            # Perform replacement on the full caption
+            new_caption = caption
+            for target, _ in normalized_targets:
+                if target in new_caption:
+                    new_caption = new_caption.replace(target, replacement)
+            
+            # Also handle entity-based replacement (URLs with text links)
+            # This ensures URLs are replaced even when they're in entities
+            if msg.caption_entities:
+                for entity in msg.caption_entities:
+                    if entity.type in [enums.MessageEntityType.URL, enums.MessageEntityType.TEXT_LINK]:
+                        entity_text = caption[entity.offset:entity.offset + entity.length]
+                        for target, target_normalized in normalized_targets:
+                            if target_normalized in normalize_text(entity_text):
+                                # Replace in the entity text
+                                new_text = entity_text.replace(target, replacement)
+                                # Update the caption
+                                new_caption = new_caption[:entity.offset] + new_text + new_caption[entity.offset + entity.length:]
+                                break
+
+            # Only edit if caption actually changed
+            if new_caption == caption:
+                stats.skipped_no_target += 1
+                return
+
+            # Edit caption (NOT text)
+            async with semaphore:
+                for attempt in range(3):
+                    try:
+                        await client.edit_message_caption(
+                            chat_id=chat_id,
+                            message_id=msg.id,
+                            caption=new_caption,
+                            parse_mode=enums.ParseMode.HTML,
+                            reply_markup=msg.reply_markup
+                        )
+                        stats.edited += 1
+                        break
+                    except errors.FloodWait as e:
+                        wait_time = e.value + 1
+                        logger.warning(f"Flood wait {wait_time}s for message {msg.id}")
+                        await asyncio.sleep(wait_time)
+                    except errors.MessageNotModified:
+                        stats.skipped_no_target += 1
+                        break
+                    except errors.MessageIdInvalid:
+                        logger.warning(f"Invalid message ID: {msg.id}")
+                        stats.failed += 1
+                        break
+                    except Exception as e:
+                        logger.error(f"Failed to edit message {msg.id} (attempt {attempt}): {e}")
+                        if attempt == 2:
+                            stats.failed += 1
+                            stats.error_reasons[msg.id] = str(e)
+                        await asyncio.sleep(1)
+
+        # Process batch with semaphore
+        await asyncio.gather(*[process_message(msg) for msg in messages])
+        stats.processed += len(messages)
+
+        # Update progress
+        await update_progress()
+
+        # Save progress to database
+        await db.replace_jobs.update_one(
+            {"user_id": user_id, "job_id": job_id},
+            {"$set": {
+                "processed": stats.processed,
+                "edited": stats.edited,
+                "skipped_no_caption": stats.skipped_no_caption,
+                "skipped_no_target": stats.skipped_no_target,
+                "failed": stats.failed,
+                "last_updated": time.time()
+            }}
+        )
+
+        # Small delay between batches to avoid rate limits
+        await asyncio.sleep(0.5)
+
+    # Completion
+    stats.end_time = time.time()
+    await update_progress(force=True)
+    await update_completion_status(client, status_msg, stats, "completed")
+    
+    # Update database
+    await db.replace_jobs.update_one(
+        {"user_id": user_id, "job_id": job_id},
+        {"$set": {
             "status": "completed",
-            "end_time": time.time()
-        }})
+            "end_time": time.time(),
+            "final_stats": {
+                "processed": stats.processed,
+                "edited": stats.edited,
+                "skipped_no_caption": stats.skipped_no_caption,
+                "skipped_no_target": stats.skipped_no_target,
+                "failed": stats.failed
+            }
+        }}
+    )
+    
+    ACTIVE_TASKS.pop(user_id, None)
+    logger.info(f"Replace job {job_id} completed for user {user_id}")
 
-    except asyncio.CancelledError:
-        logger.info(f"Replace task {job_id} cancelled.")
-        await db.replace_jobs.update_one({"user_id": user_id, "job_id": job_id}, {"$set": {"status": "cancelled"}})
-        try:
-            await client.edit_message_text(
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.id,
-                text="🛑 **Replacement task stopped immediately.**"
-            )
-        except: pass
+async def update_completion_status(client: Client, status_msg: Message, stats: ReplacementStats, status: str):
+    """Update final completion status message"""
+    elapsed = int(time.time() - stats.start_time)
+    
+    if status == "completed":
+        title = "✅ **Replacement Completed**"
+    elif status == "cancelled":
+        title = "🛑 **Replacement Cancelled**"
+    else:
+        title = "❌ **Replacement Failed**"
+    
+    completion_text = (
+        f"{title}\n\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"📂 Total Messages: **{stats.total}**\n"
+        f"✅ Captions Edited: **{stats.edited}**\n"
+        f"⏩ Skipped (No Caption): **{stats.skipped_no_caption}**\n"
+        f"⏩ Skipped (No Target): **{stats.skipped_no_target}**\n"
+        f"❌ Failed: **{stats.failed}**\n"
+        f"⏱️ Elapsed Time: **{format_duration(elapsed)}**\n"
+        f"━━━━━━━━━━━━━━"
+    )
+    
+    if stats.error_reasons:
+        error_summary = "\n\n❌ **Errors:**\n"
+        for msg_id, error in list(stats.error_reasons.items())[:5]:
+            error_summary += f"• Message {msg_id}: `{error}`\n"
+        if len(stats.error_reasons) > 5:
+            error_summary += f"• ... and {len(stats.error_reasons) - 5} more errors"
+        completion_text += error_summary
+    
+    try:
+        await client.edit_message_text(
+            chat_id=status_msg.chat.id,
+            message_id=status_msg.id,
+            text=completion_text
+        )
     except Exception as e:
-        logger.error(f"Error running replacement task: {e}", exc_info=True)
-        await db.replace_jobs.update_one({"user_id": user_id, "job_id": job_id}, {"$set": {"status": "failed"}})
-        try:
-            await client.edit_message_text(
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.id,
-                text=f"❌ **Replacement Task Failed:**\n\n`{e}`"
+        logger.error(f"Failed to update completion message: {e}")
+
+@Client.on_message(filters.command("status") & filters.private & filters.user(Config.ADMINS))
+async def status_replace_command(client: Client, message: Message):
+    """Check status of running replacement task"""
+    user_id = message.from_user.id
+    
+    # Check memory first
+    if user_id in ACTIVE_TASKS:
+        job = await db.replace_jobs.find_one({"user_id": user_id, "status": "running"})
+        if job:
+            stats = job.get("stats", {})
+            return await message.reply_text(
+                f"📊 **Active Replace Task**\n\n"
+                f"• Channel: `{job.get('chat_title')}`\n"
+                f"• Processed: `{stats.get('processed', 0)}`\n"
+                f"• Edited: `{stats.get('edited', 0)}`\n"
+                f"• Failed: `{stats.get('failed', 0)}`"
             )
-        except: pass
-    finally:
-        ACTIVE_TASKS.pop(user_id, None)
+    
+    # Check database
+    job = await db.replace_jobs.find_one({"user_id": user_id, "status": "running"})
+    if job:
+        stats = job.get("stats", {})
+        return await message.reply_text(
+            f"📊 **Active Replace Task**\n\n"
+            f"• Channel: `{job.get('chat_title')}`\n"
+            f"• Processed: `{stats.get('processed', 0)}`\n"
+            f"• Edited: `{stats.get('edited', 0)}`\n"
+            f"• Failed: `{stats.get('failed', 0)}`"
+        )
+    
+    # Check for completed jobs
+    completed = await db.replace_jobs.find_one(
+        {"user_id": user_id, "status": "completed"},
+        sort=[("end_time", -1)]
+    )
+    
+    if completed:
+        stats = completed.get("final_stats", {})
+        return await message.reply_text(
+            f"📊 **Last Completed Task**\n\n"
+            f"• Channel: `{completed.get('chat_title')}`\n"
+            f"• Processed: `{stats.get('processed', 0)}`\n"
+            f"• Edited: `{stats.get('edited', 0)}`\n"
+            f"• Failed: `{stats.get('failed', 0)}`"
+        )
+    
+    await message.reply_text("ℹ️ No replace tasks found.")
+
+@Client.on_message(filters.command("resume") & filters.private & filters.user(Config.ADMINS))
+async def resume_replace_command(client: Client, message: Message):
+    """Resume a paused or failed replacement task"""
+    user_id = message.from_user.id
+    
+    if user_id in ACTIVE_TASKS:
+        return await message.reply_text("❌ A replacement task is already running!")
+
+    job = await db.replace_jobs.find_one({
+        "user_id": user_id,
+        "status": {"$in": ["paused", "failed"]}
+    })
+
+    if not job:
+        return await message.reply_text("❌ No unfinished replace tasks found to resume.")
+
+    # Check if job can be resumed
+    first_id = job.get("first_id")
+    last_id = job.get("last_id")
+    current_id = job.get("current_id", first_id)
+    
+    if current_id > last_id:
+        return await message.reply_text("⚠️ Job appears to be already complete.")
+
+    # Create status message
+    status_msg = await message.reply_text("🔄 **Resuming replacement task...**")
+
+    # Update status
+    await db.replace_jobs.update_one(
+        {"user_id": user_id, "job_id": job["job_id"]},
+        {"$set": {"status": "running"}}
+    )
+    
+    job["status"] = "running"
+    job["current_id"] = current_id
+
+    # Start task
+    task = asyncio.create_task(run_replacement_task(client, job, status_msg))
+    ACTIVE_TASKS[user_id] = task
+    
+    logger.info(f"Resumed replace job {job['job_id']} for user {user_id}")
