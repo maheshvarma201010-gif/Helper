@@ -2,26 +2,20 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime
 from typing import Optional, List, Dict, Set, Tuple, Any
 from dataclasses import dataclass, field
 from collections import deque
-import html
 
 from pyrogram import Client, filters, errors, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram.types import Message
 from bot.database.mongo import db
 from bot.utils.helpers import parse_message_link, resolve_chat
-from bot.utils.replacer import replace_in_html, replace_in_buttons, render_message_to_html
-from bot.utils.stylizer import destylize
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
-# Active tasks registry
+# Active tasks and sessions
 ACTIVE_TASKS = {}
-
-# Sessions registry
 SESSIONS = {}
 
 @dataclass
@@ -37,10 +31,9 @@ class ReplaceSession:
     replacement: Optional[str] = None
     step: int = 1
     created_at: float = field(default_factory=time.time)
-    last_activity: float = field(default_factory=time.time)
 
 class ReplacementStats:
-    """Comprehensive statistics tracking"""
+    """Comprehensive statistics"""
     def __init__(self):
         self.total = 0
         self.processed = 0
@@ -52,9 +45,8 @@ class ReplacementStats:
         self.start_time = time.time()
         self.end_time = None
         self.error_reasons: Dict[int, str] = {}
-        self.processed_messages: Set[int] = set()
         self.found_targets: Dict[str, int] = {}
-        self.replacement_count: Dict[str, int] = {}
+        self.replacements_made: Dict[str, int] = {}
         
     def get_speed(self) -> float:
         elapsed = time.time() - self.start_time
@@ -75,9 +67,6 @@ class ReplacementStats:
         filled = int(round((percentage / 100.0) * width))
         filled = max(0, min(width, filled))
         return "█" * filled + "░" * (width - filled)
-    
-    def get_percentage(self) -> int:
-        return int((self.processed / self.total) * 100) if self.total > 0 else 0
 
 def format_duration(seconds: int) -> str:
     if seconds < 0:
@@ -89,42 +78,102 @@ def format_duration(seconds: int) -> str:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
 
-def normalize_text(text: str) -> str:
-    """Normalize text for comparison"""
-    if not text:
-        return text
-    # Remove zero-width and invisible characters
-    text = re.sub(r'[\u200b-\u200f\u2028-\u202e\u2060-\u206f\uFEFF]', '', text)
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
-def extract_all_urls(text: str) -> List[str]:
-    """Extract all URLs from text including markdown links"""
+def extract_urls_from_caption(caption: str) -> List[Tuple[str, int, int]]:
+    """
+    Extract all URLs from caption with their positions
+    Returns: List of (url, start_pos, end_pos)
+    """
     urls = []
     
-    # Standard URL pattern
-    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-    urls.extend(re.findall(url_pattern, text))
-    
-    # Markdown links
+    # Pattern for markdown links: [text](url)
     markdown_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-    for match in re.finditer(markdown_pattern, text):
+    for match in re.finditer(markdown_pattern, caption):
         url = match.group(2)
-        if url.startswith('http'):
-            urls.append(url)
+        if url.startswith(('http://', 'https://')):
+            # Get the position of the URL within the markdown
+            url_start = match.start(2)
+            url_end = match.end(2)
+            urls.append((url, url_start, url_end))
+    
+    # Pattern for plain URLs
+    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    for match in re.finditer(url_pattern, caption):
+        url = match.group(0)
+        # Check if this URL is already inside a markdown link
+        is_inside_markdown = False
+        for _, start, end in urls:
+            if start <= match.start() <= end:
+                is_inside_markdown = True
+                break
+        if not is_inside_markdown:
+            urls.append((url, match.start(), match.end()))
     
     return urls
 
+def normalize_url_for_comparison(url: str) -> str:
+    """Normalize URL for comparison"""
+    url = url.strip()
+    # Remove trailing slash
+    url = url.rstrip('/')
+    # Remove www.
+    url = re.sub(r'^https?://www\.', 'https://', url)
+    # Normalize http vs https
+    url = re.sub(r'^http://', 'https://', url)
+    return url.lower()
+
+def find_and_replace_urls(caption: str, targets: List[str], replacement: str) -> Tuple[str, Dict[str, int]]:
+    """
+    Find and replace URLs in caption
+    Returns: (new_caption, replacements_count)
+    """
+    if not caption:
+        return caption, {}
+    
+    replacements_count = {}
+    new_caption = caption
+    
+    # Sort targets by length (longest first) for proper replacement
+    targets_sorted = sorted(targets, key=len, reverse=True)
+    
+    # Extract all URLs from caption
+    urls = extract_urls_from_caption(caption)
+    
+    # Check each URL against targets
+    for url, start, end in urls:
+        url_normalized = normalize_url_for_comparison(url)
+        
+        for target in targets_sorted:
+            target_normalized = normalize_url_for_comparison(target)
+            
+            # Check if URL contains the target or vice versa
+            if target_normalized in url_normalized or url_normalized in target_normalized:
+                # Replace the URL
+                new_url = url.replace(target, replacement)
+                new_caption = new_caption[:start] + new_url + new_caption[end:]
+                
+                # Update counts
+                replacements_count[target] = replacements_count.get(target, 0) + 1
+                logger.info(f"Replaced URL: {url} -> {new_url}")
+                break
+    
+    # Also do direct string replacement for any remaining targets
+    for target in targets_sorted:
+        if target in new_caption:
+            count = new_caption.count(target)
+            if count > 0:
+                new_caption = new_caption.replace(target, replacement)
+                replacements_count[target] = replacements_count.get(target, 0) + count
+                logger.info(f"Direct replacement: {target} -> {replacement} ({count} times)")
+    
+    return new_caption, replacements_count
+
 async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, str, Optional[Any]]:
-    """Verify bot has required permissions"""
+    """Verify bot permissions"""
     try:
         chat = await resolve_chat(client, chat_id)
     except Exception as e:
         return False, f"❌ Failed to resolve chat: {e}", None
 
-    is_channel = chat.type == enums.ChatType.CHANNEL
-    
     try:
         member = await chat.get_member("me")
     except errors.UserNotParticipant:
@@ -140,8 +189,10 @@ async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, st
 
     privileges = member.privileges
     if not privileges:
-        return False, "❌ Bot is an admin but has no privileges.", chat
+        return False, "❌ Bot has no privileges.", chat
 
+    # Check required permissions
+    is_channel = chat.type == enums.ChatType.CHANNEL
     missing = []
     
     if is_channel:
@@ -156,25 +207,9 @@ async def verify_bot_permissions(client: Client, chat_id: Any) -> Tuple[bool, st
             missing.append("can_edit_messages")
 
     if missing:
-        missing_str = ", ".join(f"`{p}`" for p in missing)
-        return False, f"❌ Missing permissions: {missing_str}", chat
+        return False, f"❌ Missing: {', '.join(missing)}", chat
 
     return True, "✅ All permissions verified", chat
-
-async def edit_bot_message(client: Client, user_id: int, message_id: int, text: str):
-    """Safely edit bot message"""
-    try:
-        await client.edit_message_text(
-            chat_id=user_id,
-            message_id=message_id,
-            text=text
-        )
-        return True
-    except errors.MessageNotModified:
-        return True
-    except Exception as e:
-        logger.error(f"Failed to edit bot message: {e}")
-        return False
 
 @Client.on_message(filters.command("replace") & filters.private & filters.user(Config.ADMINS))
 async def replace_command(client: Client, message: Message):
@@ -224,8 +259,8 @@ async def cancel_replace_command(client: Client, message: Message):
                 message_id=session.bot_message_id,
                 text="🛑 **Replace Wizard Cancelled.**"
             )
-        except Exception as e:
-            logger.warning(f"Failed to edit cancel message: {e}")
+        except:
+            pass
         return await message.reply_text("🛑 **Wizard cancelled.**")
 
     if user_id in ACTIVE_TASKS:
@@ -257,8 +292,7 @@ async def done_replace_command(client: Client, message: Message):
     if not session.targets:
         await edit_bot_message(
             client, user_id, session.bot_message_id,
-            "❌ **Please add at least one replacement target first!**\n\n"
-            "Send text, URLs, emojis, or any string to replace."
+            "❌ **Please add at least one replacement target first!**"
         )
         return
 
@@ -317,7 +351,7 @@ async def handle_first_link(client: Client, message: Message, session: ReplaceSe
     if not success:
         await edit_bot_message(
             client, session.user_id, session.bot_message_id,
-            f"⚠️ **Permission Denied!**\n\n{err_msg}\n\nPlease fix permissions."
+            f"⚠️ **Permission Denied!**\n\n{err_msg}"
         )
         SESSIONS.pop(session.user_id, None)
         await db.reset_user(session.user_id)
@@ -388,7 +422,6 @@ async def handle_target(client: Client, message: Message, session: ReplaceSessio
     if item not in session.targets:
         session.targets.append(item)
     
-    # Show last 10 targets
     display_targets = "\n".join([f"• `{t[:50]}{'...' if len(t) > 50 else ''}`" for t in session.targets[-10:]])
     
     await edit_bot_message(
@@ -458,8 +491,23 @@ async def handle_replacement(client: Client, message: Message, session: ReplaceS
     task = asyncio.create_task(run_replacement_task(client, job_data, bot_msg))
     ACTIVE_TASKS[session.user_id] = task
 
+async def edit_bot_message(client: Client, user_id: int, message_id: int, text: str):
+    """Safely edit bot message"""
+    try:
+        await client.edit_message_text(
+            chat_id=user_id,
+            message_id=message_id,
+            text=text
+        )
+        return True
+    except errors.MessageNotModified:
+        return True
+    except Exception as e:
+        logger.error(f"Failed to edit bot message: {e}")
+        return False
+
 async def run_replacement_task(client: Client, job_data: Dict, status_msg: Message):
-    """Run replacement with unlimited processing"""
+    """Run replacement task"""
     
     user_id = job_data["user_id"]
     job_id = job_data["job_id"]
@@ -472,10 +520,7 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
     stats = ReplacementStats()
     stats.total = last_id - first_id + 1
 
-    # Sort targets by length (longest first) for proper replacement
-    targets_sorted = sorted(targets, key=len, reverse=True)
-
-    # Progress update function
+    # Progress update
     last_update_time = 0
     
     async def update_progress(force: bool = False):
@@ -495,12 +540,11 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
         progress_text = (
             "🔄 **Caption Replacement**\n\n"
             f"{progress_bar} **{percentage}%**\n\n"
-            f"📂 Total: **{stats.total}**\n"
-            f"✅ Edited: **{stats.edited}**\n"
-            f"⏩ No Caption: **{stats.skipped_no_caption}**\n"
-            f"⏩ No Target: **{stats.skipped_no_target}**\n"
-            f"⏩ Unchanged: **{stats.skipped_unchanged}**\n"
-            f"❌ Failed: **{stats.failed}**\n"
+            f"📂 Total: **{stats.total:,}**\n"
+            f"✅ Edited: **{stats.edited:,}**\n"
+            f"⏩ No Caption: **{stats.skipped_no_caption:,}**\n"
+            f"⏩ No Target: **{stats.skipped_no_target:,}**\n"
+            f"❌ Failed: **{stats.failed:,}**\n"
             f"⚡ Speed: **{speed_str}**\n"
             f"⏰ ETA: **{eta}**\n\n"
             f"📊 **{stats.processed:,}** / **{stats.total:,}** processed"
@@ -520,170 +564,120 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
         except Exception as e:
             logger.error(f"Failed to update progress: {e}")
 
-    # Process messages WITHOUT batch limits
-    message_cache = {}
-    
-    async def process_single_message(msg_id: int):
-        """Process a single message"""
-        
-        # Check cancellation
-        job = await db.replace_jobs.find_one({"user_id": user_id, "job_id": job_id})
-        if not job or job.get("status") == "cancelled":
-            return False
-
-        # Get message from cache or fetch
-        if msg_id in message_cache:
-            msg = message_cache[msg_id]
-        else:
-            try:
-                msg = await client.get_messages(chat_id, msg_id)
-                message_cache[msg_id] = msg
-            except errors.FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-                try:
-                    msg = await client.get_messages(chat_id, msg_id)
-                    message_cache[msg_id] = msg
-                except Exception as e:
-                    stats.failed += 1
-                    stats.error_reasons[msg_id] = str(e)
-                    return True
-            except Exception as e:
-                stats.failed += 1
-                stats.error_reasons[msg_id] = str(e)
-                return True
-
-        if not msg or msg.empty:
-            stats.skipped_no_caption += 1
-            return True
-
-        # CRITICAL: Get CAPTION not text
-        caption = msg.caption if hasattr(msg, 'caption') and msg.caption else None
-        
-        if not caption:
-            stats.skipped_no_caption += 1
-            return True
-
-        # Check for targets in FULL caption
-        has_match = False
-        matched_targets = []
-        caption_lower = caption.lower()
-        
-        for target in targets_sorted:
-            target_lower = target.lower()
-            
-            # Direct match in entire caption
-            if target_lower in caption_lower:
-                has_match = True
-                matched_targets.append(target)
-                stats.found_targets[target] = stats.found_targets.get(target, 0) + 1
-                continue
-            
-            # Check in markdown links
-            markdown_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-            for match in re.finditer(markdown_pattern, caption):
-                link_url = match.group(2)
-                link_text = match.group(1)
-                if target_lower in link_url.lower() or target_lower in link_text.lower():
-                    has_match = True
-                    matched_targets.append(target)
-                    stats.found_targets[target] = stats.found_targets.get(target, 0) + 1
-                    break
-            
-            # Check in URLs
-            if not has_match:
-                urls = extract_all_urls(caption)
-                for url in urls:
-                    if target_lower in url.lower():
-                        has_match = True
-                        matched_targets.append(target)
-                        stats.found_targets[target] = stats.found_targets.get(target, 0) + 1
-                        break
-
-        if not has_match:
-            stats.skipped_no_target += 1
-            return True
-
-        # Perform replacements on FULL caption
-        new_caption = caption
-        replacements_made = 0
-        
-        for target in matched_targets:
-            if target in new_caption:
-                count = new_caption.count(target)
-                new_caption = new_caption.replace(target, replacement)
-                replacements_made += count
-                stats.replacement_count[target] = stats.replacement_count.get(target, 0) + count
-        
-        # Also handle markdown links specifically
-        def replace_markdown(match):
-            link_text = match.group(1)
-            link_url = match.group(2)
-            for target in matched_targets:
-                if target in link_url:
-                    link_url = link_url.replace(target, replacement)
-                if target in link_text:
-                    link_text = link_text.replace(target, replacement)
-            return f'[{link_text}]({link_url})'
-        
-        new_caption = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_markdown, new_caption)
-
-        # Skip if no changes
-        if new_caption == caption:
-            stats.skipped_unchanged += 1
-            return True
-
-        # Edit CAPTION only
-        for attempt in range(3):
-            try:
-                await client.edit_message_caption(
-                    chat_id=chat_id,
-                    message_id=msg.id,
-                    caption=new_caption,
-                    parse_mode=enums.ParseMode.HTML,
-                    reply_markup=msg.reply_markup
-                )
-                stats.edited += 1
-                logger.info(f"✅ Edited message {msg.id} ({replacements_made} replacements)")
-                break
-            except errors.FloodWait as e:
-                wait_time = e.value + 1
-                logger.warning(f"FloodWait {wait_time}s for message {msg.id}")
-                await asyncio.sleep(wait_time)
-            except errors.MessageNotModified:
-                stats.skipped_unchanged += 1
-                break
-            except errors.MessageIdInvalid:
-                stats.failed += 1
-                stats.error_reasons[msg.id] = "Invalid message ID"
-                break
-            except Exception as e:
-                logger.error(f"Failed to edit message {msg.id} (attempt {attempt+1}/3): {e}")
-                if attempt == 2:
-                    stats.failed += 1
-                    stats.error_reasons[msg.id] = str(e)
-                await asyncio.sleep(1)
-
-        return True
-
     # First progress update
     await update_progress(force=True)
 
-    # Process ALL messages WITHOUT batch limits
-    # Create tasks for all messages
-    logger.info(f"Starting processing {stats.total} messages for user {user_id}")
-    
+    # Process messages
     for msg_id in range(first_id, last_id + 1):
         try:
-            await process_single_message(msg_id)
-            stats.processed += 1
-            
-            # Update progress periodically
-            if stats.processed % 10 == 0:
+            # Check cancellation
+            job = await db.replace_jobs.find_one({"user_id": user_id, "job_id": job_id})
+            if not job or job.get("status") == "cancelled":
+                logger.info(f"Task cancelled for user {user_id}")
+                await update_completion_status(client, status_msg, stats, "cancelled")
+                ACTIVE_TASKS.pop(user_id, None)
+                return
+
+            # Get message
+            try:
+                msg = await client.get_messages(chat_id, msg_id)
+            except errors.FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+                msg = await client.get_messages(chat_id, msg_id)
+            except Exception as e:
+                stats.failed += 1
+                stats.processed += 1
+                stats.error_reasons[msg_id] = str(e)
                 await update_progress()
+                continue
+
+            if not msg or msg.empty:
+                stats.skipped_no_caption += 1
+                stats.processed += 1
+                await update_progress()
+                continue
+
+            # CRITICAL: Get CAPTION not text
+            caption = msg.caption if hasattr(msg, 'caption') and msg.caption else None
             
+            if not caption:
+                stats.skipped_no_caption += 1
+                stats.processed += 1
+                await update_progress()
+                continue
+
+            # Log caption for debugging
+            logger.info(f"Processing message {msg_id}: Caption length {len(caption)}")
+            logger.debug(f"Caption preview: {caption[:200]}...")
+
+            # Find and replace URLs
+            new_caption, replacements = find_and_replace_urls(caption, targets, replacement)
+            
+            # Also do direct replacement for any remaining targets
+            for target in targets:
+                if target in new_caption:
+                    count = new_caption.count(target)
+                    if count > 0:
+                        new_caption = new_caption.replace(target, replacement)
+                        replacements[target] = replacements.get(target, 0) + count
+
+            # Check if anything changed
+            if new_caption == caption:
+                stats.skipped_no_target += 1
+                stats.processed += 1
+                await update_progress()
+                continue
+
+            # EDIT CAPTION ONLY
+            for attempt in range(3):
+                try:
+                    await client.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=msg.id,
+                        caption=new_caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_markup=msg.reply_markup
+                    )
+                    stats.edited += 1
+                    stats.processed += 1
+                    stats.replacements_made.update(replacements)
+                    
+                    # Log success
+                    total_replacements = sum(replacements.values())
+                    logger.info(f"✅ Edited message {msg_id}: {total_replacements} replacements made")
+                    break
+                    
+                except errors.FloodWait as e:
+                    wait_time = e.value + 1
+                    logger.warning(f"FloodWait {wait_time}s for message {msg_id}")
+                    await asyncio.sleep(wait_time)
+                    
+                except errors.MessageNotModified:
+                    stats.skipped_unchanged += 1
+                    stats.processed += 1
+                    break
+                    
+                except errors.MessageIdInvalid:
+                    stats.failed += 1
+                    stats.processed += 1
+                    stats.error_reasons[msg_id] = "Invalid message ID"
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"Failed to edit message {msg_id} (attempt {attempt+1}/3): {e}")
+                    if attempt == 2:
+                        stats.failed += 1
+                        stats.processed += 1
+                        stats.error_reasons[msg_id] = str(e)
+                    await asyncio.sleep(1)
+
+            # Update progress periodically
+            if stats.processed % 5 == 0:
+                await update_progress()
+
             # Small delay to avoid rate limits
             await asyncio.sleep(0.1)
-            
+
         except asyncio.CancelledError:
             logger.info(f"Task cancelled for user {user_id}")
             await update_completion_status(client, status_msg, stats, "cancelled")
@@ -697,6 +691,7 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
             logger.error(f"Unexpected error processing message {msg_id}: {e}")
             stats.failed += 1
             stats.processed += 1
+            stats.error_reasons[msg_id] = str(e)
 
     # Completion
     stats.end_time = time.time()
@@ -715,12 +710,13 @@ async def run_replacement_task(client: Client, job_data: Dict, status_msg: Messa
                 "skipped_no_target": stats.skipped_no_target,
                 "skipped_unchanged": stats.skipped_unchanged,
                 "failed": stats.failed
-            }
+            },
+            "replacements": stats.replacements_made
         }}
     )
     
     ACTIVE_TASKS.pop(user_id, None)
-    logger.info(f"✅ Replace job {job_id} completed")
+    logger.info(f"✅ Replace job {job_id} completed for user {user_id}")
 
 async def update_completion_status(client: Client, status_msg: Message, stats: ReplacementStats, status: str):
     """Update final status"""
@@ -746,24 +742,15 @@ async def update_completion_status(client: Client, status_msg: Message, stats: R
         f"━━━━━━━━━━━━━━"
     )
     
-    # Add target statistics
-    if stats.found_targets:
-        completion_text += "\n\n📊 **Targets Found:**\n"
-        for target, count in sorted(stats.found_targets.items(), key=lambda x: x[1], reverse=True)[:10]:
-            completion_text += f"• `{target[:30]}`: {count} times\n"
-    
-    if stats.replacement_count:
-        completion_text += "\n🔄 **Replacements Made:**\n"
-        for target, count in sorted(stats.replacement_count.items(), key=lambda x: x[1], reverse=True)[:10]:
-            completion_text += f"• `{target[:30]}`: {count} replacements\n"
+    # Add replacement statistics
+    if stats.replacements_made:
+        completion_text += "\n\n🔄 **Replacements Made:**\n"
+        for target, count in sorted(stats.replacements_made.items(), key=lambda x: x[1], reverse=True)[:10]:
+            display_target = target[:40] + "..." if len(target) > 40 else target
+            completion_text += f"• `{display_target}`: {count} times\n"
     
     if stats.error_reasons:
         completion_text += f"\n❌ **Errors:** {len(stats.error_reasons)} messages failed"
-        error_sample = list(stats.error_reasons.items())[:5]
-        for msg_id, error in error_sample:
-            completion_text += f"\n• Msg {msg_id}: `{error[:50]}`"
-        if len(stats.error_reasons) > 5:
-            completion_text += f"\n• ... and {len(stats.error_reasons) - 5} more errors"
     
     try:
         await client.edit_message_text(
