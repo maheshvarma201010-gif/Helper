@@ -19,7 +19,6 @@ class Database:
             logger.info("Connected to MongoDB")
 
     def _obfuscate(self, secret: str) -> str:
-        """Simple reversible encoding for API key storage in database."""
         if not secret:
             return ""
         key_bytes = Config.ENCRYPTION_SECRET.encode('utf-8')
@@ -44,7 +43,6 @@ class Database:
         doc = await self.db.users.find_one({"user_id": user_id})
         if doc and doc.get("render_api_key"):
             return self._deobfuscate(doc["render_api_key"])
-        # Fall back to global config key if set
         return Config.RENDER_API_KEY or None
 
     async def set_user_render_key(self, user_id: int, api_key: str):
@@ -53,6 +51,22 @@ class Database:
         await self.db.users.update_one(
             {"user_id": user_id},
             {"$set": {"render_api_key": enc_key, "updated_at": datetime.utcnow()}},
+            upsert=True
+        )
+
+    async def get_user_github_token(self, user_id: int) -> Optional[str]:
+        self.connect()
+        doc = await self.db.users.find_one({"user_id": user_id})
+        if doc and doc.get("github_token"):
+            return self._deobfuscate(doc["github_token"])
+        return None
+
+    async def set_user_github_token(self, user_id: int, token: str):
+        self.connect()
+        enc_token = self._obfuscate(token)
+        await self.db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"github_token": enc_token, "updated_at": datetime.utcnow()}},
             upsert=True
         )
 
@@ -104,7 +118,7 @@ class Database:
 
     async def is_authorized_user(self, user_id: int) -> bool:
         if not Config.ADMIN_IDS:
-            return True  # If no admin IDs specified, open to standard allowed users
+            return True
         if user_id in Config.ADMIN_IDS:
             return True
         self.connect()

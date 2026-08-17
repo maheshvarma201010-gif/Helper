@@ -5,10 +5,10 @@ from bot.database.mongo import db
 from bot.utils.security import auth_filter, mask_secret
 from bot.utils.github_check import check_user_github_connection, GITHUB_AUTH_URL
 from bot.utils.render_api import RenderAPI, RenderAPIError
+from bot.utils.docker_inspector import DockerInspector
 
 logger = logging.getLogger(__name__)
 
-# User state for settings key entry: {user_id: "AWAIT_KEY"}
 SETTINGS_SESSIONS = {}
 
 @Client.on_message(filters.command("settings") & auth_filter)
@@ -23,19 +23,24 @@ async def show_settings_menu(client: Client, chat_id: int, user_id: int, message
     current_key = await db.get_user_render_key(user_id)
     masked_key = mask_secret(current_key) if current_key else "Not Configured"
 
+    current_gh_token = await db.get_user_github_token(user_id)
+    masked_gh_token = mask_secret(current_gh_token) if current_gh_token else "Not Configured (Public Repos Only)"
+
     connected, _, _ = await check_user_github_connection(user_id)
     github_status = "✅ Connected & Valid" if connected else "⚠️ Action Required"
 
     text = (
         "⚙️ <b>Render Deployer Bot - Settings</b>\n\n"
         f"<b>Render API Key:</b> <code>{masked_key}</code>\n"
-        f"<b>GitHub/Render Status:</b> {github_status}\n\n"
-        "Configure your personal Render API Key to manage services safely."
+        f"<b>GitHub PAT Token:</b> <code>{masked_gh_token}</code>\n"
+        f"<b>Render-GitHub Link:</b> {github_status}\n\n"
+        "Configure your keys to manage public & private repositories on Render."
     )
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔑 Update Render API Key", callback_data="update_api_key")],
-        [InlineKeyboardButton("🔗 Connect GitHub Account", url=GITHUB_AUTH_URL)],
+        [InlineKeyboardButton("🐙 Connect GitHub Token (Private Repos)", callback_data="update_gh_token")],
+        [InlineKeyboardButton("🔗 Connect GitHub Account to Render", url=GITHUB_AUTH_URL)],
         [InlineKeyboardButton("🔄 Verify Connection", callback_data="verify_github_conn")],
         [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
     ])
@@ -59,49 +64,80 @@ async def update_key_prompt(client: Client, callback_query: CallbackQuery):
         ])
     )
 
+@Client.on_callback_query(filters.regex("^update_gh_token$") & auth_filter)
+async def update_gh_token_prompt(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    SETTINGS_SESSIONS[user_id] = "AWAIT_GH_TOKEN"
+
+    await callback_query.message.edit_text(
+        "🐙 <b>Connect GitHub Personal Access Token (PAT)</b>\n\n"
+        "To allow the bot to list and deploy your **private GitHub repositories**, send your GitHub Token (starts with <code>ghp_...</code> or <code>github_pat_...</code>):\n"
+        "<i>Create a fine-grained token on GitHub Settings -> Developer settings -> Personal Access Tokens</i>",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data="open_settings")]
+        ])
+    )
+
 @Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
 async def settings_key_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    if SETTINGS_SESSIONS.get(user_id) != "AWAIT_KEY":
+    state = SETTINGS_SESSIONS.get(user_id)
+    if not state:
+        message.continue_propagation()
         return
 
-    new_key = message.text.strip()
+    text_input = message.text.strip()
 
-    try:
-        render = RenderAPI(new_key)
-        owner_id = await render.get_owner_id()
-        if not owner_id:
-            await message.reply_text("❌ Could not authenticate with Render. Please check your API key.")
-            return
+    if state == "AWAIT_KEY":
+        try:
+            render = RenderAPI(text_input)
+            owner_id = await render.get_owner_id()
+            if not owner_id:
+                await message.reply_text("❌ Could not authenticate with Render. Please check your API key.")
+                return
 
-        await db.set_user_render_key(user_id, new_key)
-        await db.log_action(user_id, "UPDATE_RENDER_API_KEY", {})
-        SETTINGS_SESSIONS.pop(user_id, None)
+            await db.set_user_render_key(user_id, text_input)
+            await db.log_action(user_id, "UPDATE_RENDER_API_KEY", {})
+            SETTINGS_SESSIONS.pop(user_id, None)
 
-        # Check for previously deployed repos in history
-        old_deploys = await db.get_user_deployments(user_id)
-        if old_deploys:
-            count = len(old_deploys)
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
-                [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
-            ])
+            old_deploys = await db.get_user_deployments(user_id)
+            if old_deploys:
+                count = len(old_deploys)
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
+                    [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
+                ])
+                await message.reply_text(
+                    f"✅ <b>Render API Key verified and saved!</b>\n\n"
+                    f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
+                    f"Would you like to re-deploy all these old repos to your new Render account?",
+                    reply_markup=kb
+                )
+            else:
+                await message.reply_text(
+                    "✅ <b>Render API Key saved and verified successfully!</b>",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
+                )
+
+        except RenderAPIError as e:
+            await message.reply_text(f"❌ Render API Key error: {e.message}")
+        except Exception as e:
+            await message.reply_text(f"❌ Error validating key: {str(e)}")
+
+    elif state == "AWAIT_GH_TOKEN":
+        repos = await DockerInspector.fetch_user_repos("me", github_token=text_input)
+        if repos is not None:
+            await db.set_user_github_token(user_id, text_input)
+            await db.log_action(user_id, "UPDATE_GITHUB_TOKEN", {})
+            SETTINGS_SESSIONS.pop(user_id, None)
+
             await message.reply_text(
-                f"✅ <b>Render API Key verified and saved!</b>\n\n"
-                f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
-                f"Would you like to re-deploy all these old repos to your new Render account?",
-                reply_markup=kb
-            )
-        else:
-            await message.reply_text(
-                "✅ <b>Render API Key saved and verified successfully!</b>",
+                f"✅ <b>GitHub Access Token saved successfully!</b>\n"
+                f"The bot can now access all {len(repos)} public and private repositories in your account.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
             )
-
-    except RenderAPIError as e:
-        await message.reply_text(f"❌ Render API Key error: {e.message}")
-    except Exception as e:
-        await message.reply_text(f"❌ Error validating key: {str(e)}")
+        else:
+            await message.reply_text("❌ Could not authenticate GitHub Token. Please check token permissions.")
 
 @Client.on_callback_query(filters.regex("^resync_old_repos$") & auth_filter)
 async def resync_old_repos_callback(client: Client, callback_query: CallbackQuery):

@@ -23,13 +23,22 @@ class DockerInspector:
         return None
 
     @staticmethod
-    async def fetch_user_repos(owner: str) -> List[Dict[str, str]]:
-        """Fetches public repositories for a GitHub user/organization."""
-        api_url = f"https://api.github.com/users/{owner}/repos?per_page=100&sort=updated"
+    async def fetch_user_repos(owner: str, github_token: Optional[str] = None) -> List[Dict[str, str]]:
+        """
+        Fetches repositories for a GitHub user/organization.
+        If github_token is provided, fetches all private & public user/organization repos via /user/repos.
+        """
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+            api_url = "https://api.github.com/user/repos?visibility=all&per_page=100&sort=updated"
+        else:
+            api_url = f"https://api.github.com/users/{owner}/repos?per_page=100&sort=updated"
+
         repos = []
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(api_url, timeout=10) as resp:
+                async with session.get(api_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for r in data:
@@ -37,20 +46,25 @@ class DockerInspector:
                                 "name": r.get("name"),
                                 "full_name": r.get("full_name"),
                                 "html_url": r.get("html_url"),
+                                "private": r.get("private", False),
                                 "default_branch": r.get("default_branch", "main")
                             })
             except Exception as e:
-                logger.warning(f"Failed to fetch user repos for {owner}: {e}")
+                logger.warning(f"Failed to fetch user repos: {e}")
         return repos
 
     @staticmethod
-    async def fetch_repo_branches(owner: str, repo: str) -> List[str]:
-        """Fetches all branches for a GitHub repository."""
+    async def fetch_repo_branches(owner: str, repo: str, github_token: Optional[str] = None) -> List[str]:
+        """Fetches all branches for a GitHub repository (supports private repos with token)."""
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+
         api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100"
         branches = []
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(api_url, timeout=10) as resp:
+                async with session.get(api_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for b in data:
@@ -63,11 +77,26 @@ class DockerInspector:
         return branches
 
     @staticmethod
-    async def fetch_repo_file(owner: str, repo: str, branch: str, filepath: str) -> Optional[str]:
+    async def fetch_repo_file(owner: str, repo: str, branch: str, filepath: str, github_token: Optional[str] = None) -> Optional[str]:
+        headers = {}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+            # Use GitHub Contents API for private repos
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{filepath.lstrip('/')}?ref={branch}"
+            headers["Accept"] = "application/vnd.github.v3.raw"
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.get(api_url, headers=headers, timeout=10) as resp:
+                        if resp.status == 200:
+                            return await resp.text()
+                except Exception as e:
+                    logger.warning(f"Failed to fetch private file {filepath}: {e}")
+
+        # Fallback to public raw CDN
         raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filepath.lstrip('/')}"
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(raw_url, timeout=10) as resp:
+                async with session.get(raw_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         return await resp.text()
             except Exception as e:
@@ -75,12 +104,16 @@ class DockerInspector:
         return None
 
     @staticmethod
-    async def detect_dockerfiles(owner: str, repo: str, branch: str = "main") -> List[str]:
+    async def detect_dockerfiles(owner: str, repo: str, branch: str = "main", github_token: Optional[str] = None) -> List[str]:
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+
         api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
         detected = []
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(api_url, timeout=10) as resp:
+                async with session.get(api_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         tree = data.get("tree", [])
@@ -94,7 +127,7 @@ class DockerInspector:
                 logger.warning(f"GitHub API tree search failed: {e}")
 
         if not detected:
-            content = await DockerInspector.fetch_repo_file(owner, repo, branch, "Dockerfile")
+            content = await DockerInspector.fetch_repo_file(owner, repo, branch, "Dockerfile", github_token=github_token)
             if content is not None:
                 detected.append("Dockerfile")
 

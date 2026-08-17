@@ -10,12 +10,120 @@ from bot.utils.formatter import format_service_card
 
 logger = logging.getLogger(__name__)
 
-# State dictionary for change branch/repo: {user_id: {"service_id": str, "action": str, ...}}
 SERVICE_EDIT_SESSIONS = {}
 
 @Client.on_message(filters.command("projects") & auth_filter)
 async def list_projects_command(client: Client, message: Message):
     await display_projects_list(client, message.chat.id, message.from_user.id)
+
+@Client.on_message(filters.command("status") & auth_filter)
+async def status_command(client: Client, message: Message):
+    await display_projects_list(client, message.chat.id, message.from_user.id)
+
+@Client.on_message(filters.command("logs") & auth_filter)
+async def logs_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        await message.reply_text("🔑 Please configure your Render API Key in /settings first.")
+        return
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            await message.reply_text("📂 No services found.")
+            return
+        buttons = []
+        for item in services:
+            srv = item.get("service", item)
+            buttons.append([InlineKeyboardButton(f"📜 {srv.get('name')}", callback_data=f"logs_{srv.get('id')}")])
+        await message.reply_text("📜 Select a service to view logs:", reply_markup=InlineKeyboardMarkup(buttons))
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Error: {e.message}")
+
+@Client.on_message(filters.command("restart") & auth_filter)
+async def restart_cmd_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        await message.reply_text("🔑 Please configure your Render API Key in /settings first.")
+        return
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            await message.reply_text("📂 No services found.")
+            return
+        buttons = []
+        for item in services:
+            srv = item.get("service", item)
+            buttons.append([InlineKeyboardButton(f"🔁 Restart {srv.get('name')}", callback_data=f"restart_{srv.get('id')}")])
+        await message.reply_text("🔁 Select a service to restart:", reply_markup=InlineKeyboardMarkup(buttons))
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Error: {e.message}")
+
+@Client.on_message(filters.command("redeploy") & auth_filter)
+async def redeploy_cmd_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        await message.reply_text("🔑 Please configure your Render API Key in /settings first.")
+        return
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            await message.reply_text("📂 No services found.")
+            return
+        buttons = []
+        for item in services:
+            srv = item.get("service", item)
+            buttons.append([InlineKeyboardButton(f"🚀 Redeploy {srv.get('name')}", callback_data=f"redeploy_{srv.get('id')}")])
+        await message.reply_text("🚀 Select a service to redeploy:", reply_markup=InlineKeyboardMarkup(buttons))
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Error: {e.message}")
+
+@Client.on_message(filters.command("stop") & auth_filter)
+async def stop_cmd_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        await message.reply_text("🔑 Please configure your Render API Key in /settings first.")
+        return
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            await message.reply_text("📂 No services found.")
+            return
+        buttons = []
+        for item in services:
+            srv = item.get("service", item)
+            buttons.append([InlineKeyboardButton(f"⏸ Suspend {srv.get('name')}", callback_data=f"suspend_{srv.get('id')}")])
+        await message.reply_text("⏸ Select a service to suspend/stop:", reply_markup=InlineKeyboardMarkup(buttons))
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Error: {e.message}")
+
+@Client.on_message(filters.command("delete") & auth_filter)
+async def delete_cmd_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        await message.reply_text("🔑 Please configure your Render API Key in /settings first.")
+        return
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            await message.reply_text("📂 No services found.")
+            return
+        buttons = []
+        for item in services:
+            srv = item.get("service", item)
+            buttons.append([InlineKeyboardButton(f"🗑 Delete {srv.get('name')}", callback_data=f"delete_confirm_{srv.get('id')}")])
+        await message.reply_text("🗑 Select a service to delete:", reply_markup=InlineKeyboardMarkup(buttons))
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Error: {e.message}")
 
 @Client.on_callback_query(filters.regex("^list_projects$") & auth_filter)
 async def list_projects_callback(client: Client, callback_query: CallbackQuery):
@@ -119,7 +227,8 @@ async def change_branch_prompt(client: Client, callback_query: CallbackQuery):
 
         if parsed:
             owner, repo_name = parsed
-            branches = await DockerInspector.fetch_repo_branches(owner, repo_name)
+            gh_token = await db.get_user_github_token(user_id)
+            branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
             buttons = []
             row = []
             for idx, b in enumerate(branches[:10]):
@@ -159,7 +268,6 @@ async def set_branch_callback(client: Client, callback_query: CallbackQuery):
         await db.log_action(user_id, "UPDATE_SERVICE_BRANCH", {"service_id": srv_id, "branch": new_branch})
         await callback_query.answer(f"✅ Branch updated to {new_branch} & redeployment triggered!", show_alert=True)
 
-        # Reload card
         service = await render.get_service(srv_id)
         card_text = format_service_card(service)
         await callback_query.message.edit_text(card_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Service", callback_data=f"view_service_{srv_id}")]]))
@@ -184,6 +292,7 @@ async def project_edit_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = SERVICE_EDIT_SESSIONS.get(user_id)
     if not session:
+        message.continue_propagation()
         return
 
     srv_id = session["service_id"]

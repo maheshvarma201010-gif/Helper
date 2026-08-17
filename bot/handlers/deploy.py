@@ -11,7 +11,6 @@ from bot.utils.formatter import format_deployment_preview
 
 logger = logging.getLogger(__name__)
 
-# Temporary deployment wizard state per user: {user_id: dict_config}
 DEPLOY_SESSIONS: Dict[int, Dict[str, Any]] = {}
 
 def get_deployment_type_keyboard() -> InlineKeyboardMarkup:
@@ -120,10 +119,12 @@ async def wizard_text_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = DEPLOY_SESSIONS.get(user_id)
     if not session:
+        message.continue_propagation()
         return
 
     step = session.get("step")
     text = message.text.strip()
+    gh_token = await db.get_user_github_token(user_id)
 
     if step == "AWAIT_REPO":
         parsed = DockerInspector.parse_github_url(text)
@@ -134,26 +135,25 @@ async def wizard_text_input_handler(client: Client, message: Message):
             session["repo_name"] = repo_name
             await fetch_and_show_branches(client, message.chat.id, user_id, session)
         else:
-            # Treat text as username to list available repos
             owner = text.lstrip("@").strip()
             msg = await message.reply_text(f"🔍 Fetching repositories for <code>{owner}</code>...")
-            repos = await DockerInspector.fetch_user_repos(owner)
+            repos = await DockerInspector.fetch_user_repos(owner, github_token=gh_token)
             if not repos:
-                await msg.edit_text("❌ No public repositories found or invalid URL. Please send full repo URL.")
+                await msg.edit_text("❌ No repositories found or invalid URL. Please send full repo URL or connect GitHub PAT in /settings.")
                 return
 
             session["owner"] = owner
             session["user_repos"] = repos
             buttons = []
-            for r in repos[:10]: # Top 10 repos
-                buttons.append([InlineKeyboardButton(f"📦 {r['name']}", callback_data=f"select_user_repo_{r['name']}")])
+            for r in repos[:15]:
+                label = f"🔒 {r['name']}" if r.get('private') else f"📦 {r['name']}"
+                buttons.append([InlineKeyboardButton(label, callback_data=f"select_user_repo_{r['name']}")])
             buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
             await msg.edit_text("📦 <b>Available Repositories:</b>\nSelect a repository to deploy:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif step == "AWAIT_SERVICE_NAME":
         session["name"] = text
 
-        # IF DOCKER MODE: NEVER ask for buildCommand/startCommand!
         if session.get("is_docker"):
             session["step"] = "AWAIT_ENV_VARS"
             await message.reply_text(
@@ -212,19 +212,32 @@ async def select_user_repo_callback(client: Client, callback_query: CallbackQuer
     if not session:
         return
 
-    owner = session["owner"]
+    owner = session.get("owner", "user")
+    repo_obj = None
+    for r in session.get("user_repos", []):
+        if r.get("name") == repo_name:
+            repo_obj = r
+            break
+
+    if repo_obj and repo_obj.get("html_url"):
+        session["repo"] = repo_obj["html_url"]
+        if "/" in repo_obj.get("full_name", ""):
+            session["owner"] = repo_obj["full_name"].split("/")[0]
+    else:
+        session["repo"] = f"https://github.com/{owner}/{repo_name}"
+
     session["repo_name"] = repo_name
-    session["repo"] = f"https://github.com/{owner}/{repo_name}"
-    await callback_query.message.edit_text(f"✅ Repository selected: <code>{owner}/{repo_name}</code>")
+    await callback_query.message.edit_text(f"✅ Repository selected: <code>{session.get('owner')}/{repo_name}</code>")
     await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session)
 
 async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
     owner = session["owner"]
     repo_name = session["repo_name"]
     session["step"] = "AWAIT_BRANCH_SELECT"
+    gh_token = await db.get_user_github_token(user_id)
 
     msg = await client.send_message(chat_id, f"🌿 Fetching branches for <code>{owner}/{repo_name}</code>...")
-    branches = await DockerInspector.fetch_repo_branches(owner, repo_name)
+    branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
     session["fetched_branches"] = branches
     DEPLOY_SESSIONS[user_id] = session
 
@@ -261,10 +274,11 @@ async def proceed_after_branch(client: Client, chat_id: int, user_id: int, sessi
     owner = session["owner"]
     repo_name = session["repo_name"]
     branch = session.get("branch", "main")
+    gh_token = await db.get_user_github_token(user_id)
 
     if session.get("is_docker"):
         status_msg = await client.send_message(chat_id, "🔍 Inspecting repository for Dockerfile...")
-        detected = await DockerInspector.detect_dockerfiles(owner, repo_name, branch)
+        detected = await DockerInspector.detect_dockerfiles(owner, repo_name, branch, github_token=gh_token)
 
         if not detected:
             await status_msg.edit_text(
@@ -329,7 +343,8 @@ async def check_dockerfile_callback(client: Client, callback_query: CallbackQuer
         return
 
     df_path = session.get("dockerfilePath", "Dockerfile")
-    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path)
+    gh_token = await db.get_user_github_token(user_id)
+    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path, github_token=gh_token)
 
     if content is None:
         await callback_query.message.edit_text("❌ Failed to fetch Dockerfile content from GitHub.")
@@ -363,7 +378,8 @@ async def fix_dockerfile_callback(client: Client, callback_query: CallbackQuery)
         return
 
     df_path = session.get("dockerfilePath", "Dockerfile")
-    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path) or ""
+    gh_token = await db.get_user_github_token(user_id)
+    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path, github_token=gh_token) or ""
     fixed_content, diff_text = DockerInspector.fix_dockerfile(content, project_type="python")
 
     await callback_query.message.edit_text(

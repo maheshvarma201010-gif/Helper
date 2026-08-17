@@ -8,7 +8,6 @@ from bot.utils.render_api import RenderAPI, RenderAPIError
 
 logger = logging.getLogger(__name__)
 
-# State dictionary for user env edits: {user_id: {"service_id": str, "action": str, "key": str}}
 ENV_SESSIONS: Dict[int, Dict[str, str]] = {}
 
 @Client.on_message(filters.command("env") & auth_filter)
@@ -149,6 +148,7 @@ async def env_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = ENV_SESSIONS.get(user_id)
     if not session:
+        message.continue_propagation()
         return
 
     srv_id = session["service_id"]
