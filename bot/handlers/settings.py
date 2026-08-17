@@ -72,11 +72,68 @@ async def update_gh_token_prompt(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_text(
         "🐙 <b>Connect GitHub Personal Access Token (PAT)</b>\n\n"
         "To allow the bot to list and deploy your **private GitHub repositories**, send your GitHub Token (starts with <code>ghp_...</code> or <code>github_pat_...</code>):\n"
-        "<i>Create a fine-grained token on GitHub Settings -> Developer settings -> Personal Access Tokens</i>",
+        "<i>Create a token on GitHub Settings -> Developer settings -> Personal Access Tokens</i>",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("❌ Cancel", callback_data="open_settings")]
         ])
     )
+
+# Global Auto-Detection Handler for Render API Key & GitHub Tokens sent anytime
+@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter, group=-1)
+async def auto_token_detector(client: Client, message: Message):
+    user_id = message.from_user.id
+    text_input = message.text.strip()
+
+    # Check for Render API Key (rnd_...)
+    if "rnd_" in text_input:
+        key = [part for part in text_input.split() if part.startswith("rnd_")][0]
+        try:
+            render = RenderAPI(key)
+            owner_id = await render.get_owner_id()
+            if owner_id:
+                await db.set_user_render_key(user_id, key)
+                await db.log_action(user_id, "AUTO_SAVE_RENDER_API_KEY", {})
+                SETTINGS_SESSIONS.pop(user_id, None)
+
+                old_deploys = await db.get_user_deployments(user_id)
+                if old_deploys:
+                    count = len(old_deploys)
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
+                        [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
+                    ])
+                    await message.reply_text(
+                        f"✅ <b>Render API Key detected, verified & saved!</b>\n\n"
+                        f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
+                        f"Would you like to re-deploy all these old repos to your new Render account?",
+                        reply_markup=kb
+                    )
+                else:
+                    await message.reply_text(
+                        f"✅ <b>Render API Key detected, verified & saved!</b>\nKey: <code>{mask_secret(key)}</code>",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
+                    )
+                return
+        except Exception as e:
+            logger.warning(f"Auto-detect Render key validation failed: {e}")
+
+    # Check for GitHub PAT Token (ghp_... or github_pat_...)
+    if "ghp_" in text_input or "github_pat_" in text_input:
+        token = [part for part in text_input.split() if part.startswith("ghp_") or part.startswith("github_pat_")][0]
+        repos = await DockerInspector.fetch_user_repos("me", github_token=token)
+        if repos is not None:
+            await db.set_user_github_token(user_id, token)
+            await db.log_action(user_id, "AUTO_SAVE_GITHUB_TOKEN", {})
+            SETTINGS_SESSIONS.pop(user_id, None)
+
+            await message.reply_text(
+                f"✅ <b>GitHub Access Token detected, verified & saved!</b>\n"
+                f"The bot can now access all {len(repos)} public and private repositories in your account.\nToken: <code>{mask_secret(token)}</code>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Start Deploy", callback_data="start_deploy")]])
+            )
+            return
+
+    message.continue_propagation()
 
 @Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
 async def settings_key_input_handler(client: Client, message: Message):

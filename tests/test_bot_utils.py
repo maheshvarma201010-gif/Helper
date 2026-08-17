@@ -6,6 +6,7 @@ from bot.utils.formatter import format_deployment_preview, get_status_badge
 
 def test_mask_secret():
     assert mask_secret("rnd_1234567890abcdef") == "rnd****def"
+    assert mask_secret("ghp_1234567890abcdef") == "ghp****def"
     assert mask_secret("short") == "sh****"
     assert mask_secret("123") == "****"
 
@@ -24,6 +25,10 @@ def test_docker_inspector_parse_url():
     owner, repo = DockerInspector.parse_github_url("https://github.com/myorg/myrepo.git")
     assert owner == "myorg"
     assert repo == "myrepo"
+
+    owner_short, repo_short = DockerInspector.parse_github_url("myorg/myrepo")
+    assert owner_short == "myorg"
+    assert repo_short == "myrepo"
 
 def test_docker_inspector_validate():
     valid_df = "FROM python:3.12-slim\nWORKDIR /app\nCMD [\"python\", \"main.py\"]"
