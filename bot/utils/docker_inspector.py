@@ -19,13 +19,11 @@ class DockerInspector:
         if not url:
             return None
         url = url.strip()
-        # Full URL format: https://github.com/owner/repo or github.com/owner/repo
         pattern_full = r"github\.com/([^/]+)/([^/\s.]+)"
         match = re.search(pattern_full, url)
         if match:
             return match.group(1), match.group(2).rstrip(".git")
 
-        # Owner/Repo format: owner/repo
         pattern_short = r"^([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)$"
         match_short = re.match(pattern_short, url)
         if match_short:
@@ -35,11 +33,6 @@ class DockerInspector:
 
     @staticmethod
     async def fetch_user_repos(owner: str, github_token: Optional[str] = None) -> Optional[List[Dict[str, str]]]:
-        """
-        Fetches repositories for a GitHub user/organization.
-        If github_token is provided, uses Bearer authentication on /user/repos to fetch private and public repos.
-        Returns None if authentication/request fails.
-        """
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "RenderDeployerBot"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token.strip()}"
@@ -73,24 +66,35 @@ class DockerInspector:
 
     @staticmethod
     async def fetch_repo_branches(owner: str, repo: str, github_token: Optional[str] = None) -> List[str]:
-        """Fetches all branches for a GitHub repository (supports private repos with token)."""
+        """Fetches ALL branches for a GitHub repository handling multi-page results."""
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "RenderDeployerBot"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token.strip()}"
 
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100"
         branches = []
+        page = 1
         async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(api_url, headers=headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if isinstance(data, list):
-                            for b in data:
-                                if "name" in b:
-                                    branches.append(b["name"])
-            except Exception as e:
-                logger.warning(f"Failed to fetch branches for {owner}/{repo}: {e}")
+            while page <= 5: # Fetch up to 500 branches
+                api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+                try:
+                    async with session.get(api_url, headers=headers, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                for b in data:
+                                    if "name" in b:
+                                        branches.append(b["name"])
+                                if len(data) < 100:
+                                    break
+                                page += 1
+                            else:
+                                break
+                        else:
+                            break
+                except Exception as e:
+                    logger.warning(f"Failed to fetch branches page {page} for {owner}/{repo}: {e}")
+                    break
+
         if not branches:
             branches = ["main", "master"]
         return branches
@@ -110,7 +114,6 @@ class DockerInspector:
                 except Exception as e:
                     logger.warning(f"Failed to fetch private file {filepath}: {e}")
 
-        # Fallback raw CDN
         raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filepath.lstrip('/')}"
         async with aiohttp.ClientSession() as session:
             try:

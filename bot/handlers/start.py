@@ -10,8 +10,8 @@ START_TEXT = (
     "and Docker applications on Render directly from Telegram.\n\n"
     "<b>Features:</b>\n"
     "• 🐳 Standard & Dockerfile Deployments\n"
+    "• 📦 /repos - View & select all your public & private GitHub repos\n"
     "• 🔍 Automatic Dockerfile detection, inspection & auto-fix\n"
-    "• 📱 Modern Telegram Render Dashboard Mini App\n"
     "• ⚙️ Environment variables manager & Live Branch/Repo Switcher\n"
     "• 📊 Real-time logs, status monitoring, and service restart\n\n"
     "Select an option below to get started:"
@@ -22,6 +22,7 @@ HELP_TEXT = (
     "<b>Commands:</b>\n"
     "• /start - Welcome menu and available actions\n"
     "• /deploy - Start a new application deployment\n"
+    "• /repos - View & deploy public and private GitHub repositories\n"
     "• /projects - List connected Render services\n"
     "• /status - View real-time status of services\n"
     "• /logs - View recent build/runtime logs\n"
@@ -30,19 +31,18 @@ HELP_TEXT = (
     "• /stop - Suspend a service\n"
     "• /delete - Safely delete a service\n"
     "• /env - View and manage environment variables\n"
-    "• /settings - Configure Render API token and preferences\n"
+    "• /settings - Configure Render API token and GitHub PAT\n"
     "• /help - Show this help menu"
 )
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    miniapp_url = f"http://localhost:{Config.PORT}/miniapp"
-    return InlineKeyboardMarkup([
+    buttons = [
         [
             InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy"),
-            InlineKeyboardButton("📂 Projects", callback_data="list_projects")
+            InlineKeyboardButton("📦 My Repos", callback_data="list_repos_0")
         ],
         [
-            InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=miniapp_url)),
+            InlineKeyboardButton("📂 Projects", callback_data="list_projects"),
             InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env")
         ],
         [
@@ -52,7 +52,13 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📖 Help", callback_data="show_help")
         ]
-    ])
+    ]
+
+    # Only include WebAppInfo button if HTTPS is configured, preventing Telegram WebApp URL validation errors
+    if Config.PORT == 443:
+        buttons.insert(1, [InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=f"https://localhost/miniapp"))])
+
+    return InlineKeyboardMarkup(buttons)
 
 @Client.on_message(filters.command("start") & auth_filter)
 async def start_command(client: Client, message: Message):

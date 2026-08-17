@@ -85,7 +85,7 @@ async def deploy_mode_callback(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_text(
         f"<b>{mode_title}</b>\n\n"
         "Please send GitHub Owner / Repo URL or GitHub Username:\n"
-        "<i>Examples: https://github.com/owner/repository OR just owner_username</i>",
+        "<i>Examples: https://github.com/owner/repository OR owner/repository OR owner_username</i>",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
         ])
@@ -114,7 +114,7 @@ async def service_type_callback(client: Client, callback_query: CallbackQuery):
         ])
     )
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
+@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
 async def wizard_text_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = DEPLOY_SESSIONS.get(user_id)
@@ -130,10 +130,10 @@ async def wizard_text_input_handler(client: Client, message: Message):
         parsed = DockerInspector.parse_github_url(text)
         if parsed:
             owner, repo_name = parsed
-            session["repo"] = text
+            session["repo"] = f"https://github.com/{owner}/{repo_name}"
             session["owner"] = owner
             session["repo_name"] = repo_name
-            await fetch_and_show_branches(client, message.chat.id, user_id, session)
+            await fetch_and_show_branches(client, message.chat.id, user_id, session, page=0)
         else:
             owner = text.lstrip("@").strip()
             msg = await message.reply_text(f"🔍 Fetching repositories for <code>{owner}</code>...")
@@ -228,44 +228,79 @@ async def select_user_repo_callback(client: Client, callback_query: CallbackQuer
 
     session["repo_name"] = repo_name
     await callback_query.message.edit_text(f"✅ Repository selected: <code>{session.get('owner')}/{repo_name}</code>")
-    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session)
+    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session, page=0)
 
-async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
+@Client.on_callback_query(filters.regex("^select_branch_page_(\\d+)$") & auth_filter)
+async def branch_page_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    page = int(callback_query.matches[0].group(1))
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session:
+        return
+    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session, page=page, message_to_edit=callback_query.message)
+
+async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], page: int = 0, message_to_edit: Message = None):
     owner = session["owner"]
     repo_name = session["repo_name"]
     session["step"] = "AWAIT_BRANCH_SELECT"
     gh_token = await db.get_user_github_token(user_id)
 
-    msg = await client.send_message(chat_id, f"🌿 Fetching branches for <code>{owner}/{repo_name}</code>...")
-    branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
-    session["fetched_branches"] = branches
-    DEPLOY_SESSIONS[user_id] = session
+    branches = session.get("fetched_branches")
+    if not branches:
+        if message_to_edit:
+            await message_to_edit.edit_text(f"🌿 Fetching all branches for <code>{owner}/{repo_name}</code>...")
+        else:
+            msg = await client.send_message(chat_id, f"🌿 Fetching all branches for <code>{owner}/{repo_name}</code>...")
+            message_to_edit = msg
+
+        branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
+        session["fetched_branches"] = branches
+        DEPLOY_SESSIONS[user_id] = session
+
+    PAGE_SIZE = 8
+    total_branches = len(branches)
+    total_pages = (total_branches + PAGE_SIZE - 1) // PAGE_SIZE
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, total_branches)
+    page_branches = branches[start_idx:end_idx]
 
     buttons = []
     row = []
-    for idx, b in enumerate(branches[:12]):
-        row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"select_branch_{idx}"))
+    for b in page_branches:
+        row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"select_branch_name_{b}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"select_branch_page_{page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"Page {page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"select_branch_page_{page + 1}"))
+
+    buttons.append(nav_row)
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
 
-    await msg.edit_text(
-        f"🌿 <b>Available Branches for {owner}/{repo_name}:</b>\nSelect a branch to deploy:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    text = f"🌿 <b>Available Branches for {owner}/{repo_name} ({total_branches} Total):</b>\nSelect a branch to deploy:"
 
-@Client.on_callback_query(filters.regex("^select_branch_(\\d+)$") & auth_filter)
-async def select_branch_callback(client: Client, callback_query: CallbackQuery):
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await client.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Client.on_callback_query(filters.regex("^select_branch_name_(.+)$") & auth_filter)
+async def select_branch_name_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    idx = int(callback_query.matches[0].group(1))
+    branch = callback_query.matches[0].group(1).strip()
     session = DEPLOY_SESSIONS.get(user_id)
-    if not session or "fetched_branches" not in session:
+    if not session:
         return
 
-    branch = session["fetched_branches"][idx]
     session["branch"] = branch
     await callback_query.message.edit_text(f"✅ Selected Branch: <code>{branch}</code>")
     await proceed_after_branch(client, callback_query.message.chat.id, user_id, session)
