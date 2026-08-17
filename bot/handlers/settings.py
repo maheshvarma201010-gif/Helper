@@ -67,7 +67,6 @@ async def settings_key_input_handler(client: Client, message: Message):
 
     new_key = message.text.strip()
 
-    # Test key against Render API
     try:
         render = RenderAPI(new_key)
         owner_id = await render.get_owner_id()
@@ -79,12 +78,74 @@ async def settings_key_input_handler(client: Client, message: Message):
         await db.log_action(user_id, "UPDATE_RENDER_API_KEY", {})
         SETTINGS_SESSIONS.pop(user_id, None)
 
-        await message.reply_text(
-            "✅ <b>Render API Key saved and verified successfully!</b>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
-        )
+        # Check for previously deployed repos in history
+        old_deploys = await db.get_user_deployments(user_id)
+        if old_deploys:
+            count = len(old_deploys)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
+                [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
+            ])
+            await message.reply_text(
+                f"✅ <b>Render API Key verified and saved!</b>\n\n"
+                f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
+                f"Would you like to re-deploy all these old repos to your new Render account?",
+                reply_markup=kb
+            )
+        else:
+            await message.reply_text(
+                "✅ <b>Render API Key saved and verified successfully!</b>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
+            )
 
     except RenderAPIError as e:
         await message.reply_text(f"❌ Render API Key error: {e.message}")
     except Exception as e:
         await message.reply_text(f"❌ Error validating key: {str(e)}")
+
+@Client.on_callback_query(filters.regex("^resync_old_repos$") & auth_filter)
+async def resync_old_repos_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    render = RenderAPI(api_key)
+
+    old_deploys = await db.get_user_deployments(user_id)
+    if not old_deploys:
+        await callback_query.answer("No old deployments found.", show_alert=True)
+        return
+
+    msg = await callback_query.message.edit_text("⏳ <b>Resynced API key. Deploying old repositories to new Render account...</b>")
+    deployed_count = 0
+
+    for record in old_deploys:
+        try:
+            config = {
+                "name": record.get("service_name"),
+                "repo": record.get("repo_url"),
+                "branch": record.get("branch", "main"),
+                "type": record.get("service_type", "web_service"),
+                "is_docker": record.get("is_docker", False),
+                "dockerfilePath": "./Dockerfile",
+                "dockerContext": "."
+            }
+            res = await render.create_service(config)
+            srv = res.get("service", res)
+            srv_id = srv.get("id")
+            await db.save_deployment(
+                user_id=user_id,
+                service_id=srv_id,
+                service_name=record.get("service_name"),
+                repo_url=record.get("repo_url"),
+                branch=record.get("branch", "main"),
+                service_type=record.get("service_type", "web_service"),
+                is_docker=record.get("is_docker", False),
+                status="created"
+            )
+            deployed_count += 1
+        except Exception as e:
+            logger.warning(f"Resync deployment error for {record.get('service_name')}: {e}")
+
+    await msg.edit_text(
+        f"✅ <b>Resync Complete!</b>\n\nSuccessfully deployed {deployed_count} old repositories to your new Render account.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 View Projects", callback_data="list_projects")]])
+    )

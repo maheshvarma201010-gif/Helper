@@ -1,5 +1,6 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from bot.config import Config
 from bot.utils.security import auth_filter
 from bot.utils.github_check import check_user_github_connection, GITHUB_AUTH_URL
 
@@ -10,7 +11,8 @@ START_TEXT = (
     "<b>Features:</b>\n"
     "• 🐳 Standard & Dockerfile Deployments\n"
     "• 🔍 Automatic Dockerfile detection, inspection & auto-fix\n"
-    "• ⚙️ Environment variables manager\n"
+    "• 📱 Modern Telegram Render Dashboard Mini App\n"
+    "• ⚙️ Environment variables manager & Live Branch/Repo Switcher\n"
     "• 📊 Real-time logs, status monitoring, and service restart\n\n"
     "Select an option below to get started:"
 )
@@ -24,7 +26,7 @@ HELP_TEXT = (
     "• /status - View real-time status of services\n"
     "• /logs - View recent build/runtime logs\n"
     "• /restart - Restart a service\n"
-    "• /redeploy - Trigger a fresh deployment\n"
+    "• /redeploy - Trigger a new deployment\n"
     "• /stop - Suspend a service\n"
     "• /delete - Safely delete a service\n"
     "• /env - View and manage environment variables\n"
@@ -33,13 +35,14 @@ HELP_TEXT = (
 )
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    miniapp_url = f"http://localhost:{Config.PORT}/miniapp"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy"),
             InlineKeyboardButton("📂 Projects", callback_data="list_projects")
         ],
         [
-            InlineKeyboardButton("📊 Status", callback_data="view_status"),
+            InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=miniapp_url)),
             InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env")
         ],
         [

@@ -16,7 +16,6 @@ class DockerfileCheckResult:
 class DockerInspector:
     @staticmethod
     def parse_github_url(url: str) -> Optional[Tuple[str, str]]:
-        """Parses a GitHub URL into (owner, repo)."""
         pattern = r"github\.com/([^/]+)/([^/.]+)"
         match = re.search(pattern, url)
         if match:
@@ -24,8 +23,47 @@ class DockerInspector:
         return None
 
     @staticmethod
+    async def fetch_user_repos(owner: str) -> List[Dict[str, str]]:
+        """Fetches public repositories for a GitHub user/organization."""
+        api_url = f"https://api.github.com/users/{owner}/repos?per_page=100&sort=updated"
+        repos = []
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(api_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for r in data:
+                            repos.append({
+                                "name": r.get("name"),
+                                "full_name": r.get("full_name"),
+                                "html_url": r.get("html_url"),
+                                "default_branch": r.get("default_branch", "main")
+                            })
+            except Exception as e:
+                logger.warning(f"Failed to fetch user repos for {owner}: {e}")
+        return repos
+
+    @staticmethod
+    async def fetch_repo_branches(owner: str, repo: str) -> List[str]:
+        """Fetches all branches for a GitHub repository."""
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=100"
+        branches = []
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(api_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for b in data:
+                            if "name" in b:
+                                branches.append(b["name"])
+            except Exception as e:
+                logger.warning(f"Failed to fetch branches for {owner}/{repo}: {e}")
+        if not branches:
+            branches = ["main", "master"]
+        return branches
+
+    @staticmethod
     async def fetch_repo_file(owner: str, repo: str, branch: str, filepath: str) -> Optional[str]:
-        """Fetches raw file content from GitHub raw content CDN."""
         raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filepath.lstrip('/')}"
         async with aiohttp.ClientSession() as session:
             try:
@@ -38,9 +76,6 @@ class DockerInspector:
 
     @staticmethod
     async def detect_dockerfiles(owner: str, repo: str, branch: str = "main") -> List[str]:
-        """
-        Detects Dockerfile paths in the repository using GitHub API or checking common locations.
-        """
         api_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
         detected = []
         async with aiohttp.ClientSession() as session:
@@ -59,7 +94,6 @@ class DockerInspector:
                 logger.warning(f"GitHub API tree search failed: {e}")
 
         if not detected:
-            # Fallback check standard root Dockerfile
             content = await DockerInspector.fetch_repo_file(owner, repo, branch, "Dockerfile")
             if content is not None:
                 detected.append("Dockerfile")
@@ -68,10 +102,6 @@ class DockerInspector:
 
     @staticmethod
     def validate_dockerfile(content: str) -> DockerfileCheckResult:
-        """
-        Inspects Dockerfile instructions (FROM, RUN, COPY, WORKDIR, EXPOSE, CMD, ENTRYPOINT).
-        Validates syntax and flags common issues.
-        """
         errors = []
         warnings = []
         suggestions = []
@@ -91,7 +121,6 @@ class DockerInspector:
             elif upper_line.startswith("CMD") or upper_line.startswith("ENTRYPOINT"):
                 has_cmd_or_entrypoint = True
 
-            # Check for unquoted JSON format warnings in CMD/ENTRYPOINT
             if (upper_line.startswith("CMD") or upper_line.startswith("ENTRYPOINT")) and not line.strip().startswith("["):
                 warnings.append(f"Line {i+1}: Consider using exec form [\"cmd\", \"arg\"] for {line.split()[0]}")
 
@@ -106,21 +135,15 @@ class DockerInspector:
 
     @staticmethod
     def fix_dockerfile(content: str, project_type: str = "python") -> Tuple[str, str]:
-        """
-        Fixes genuine Docker-related problems in Dockerfile while preserving project logic.
-        Returns (fixed_content, diff_text).
-        """
         original_lines = content.splitlines()
         fixed_lines = list(original_lines)
 
-        # Check if FROM is present
         has_from = any(line.strip().upper().startswith("FROM") for line in fixed_lines if not line.strip().startswith("#"))
         if not has_from:
             base_image = "python:3.12-slim" if project_type == "python" else "node:20-alpine"
             fixed_lines.insert(0, f"FROM {base_image}")
             fixed_lines.insert(1, "WORKDIR /app")
 
-        # Check if CMD or ENTRYPOINT present
         has_cmd = any(line.strip().upper().startswith(("CMD", "ENTRYPOINT")) for line in fixed_lines if not line.strip().startswith("#"))
         if not has_cmd:
             if project_type == "python":
@@ -132,7 +155,6 @@ class DockerInspector:
 
         fixed_content = "\n".join(fixed_lines) + "\n"
 
-        # Generate Unified Diff
         diff = difflib.unified_diff(
             original_lines,
             fixed_lines,
@@ -148,7 +170,6 @@ class DockerInspector:
 
     @staticmethod
     def generate_dockerfile_template(project_type: str = "python") -> str:
-        """Generates a default production-ready Dockerfile when none exists."""
         if project_type.lower() == "node":
             return (
                 "FROM node:20-alpine\n"
@@ -171,7 +192,7 @@ class DockerInspector:
                 "EXPOSE 8080\n"
                 "CMD [\"./main\"]\n"
             )
-        else:  # Python
+        else:
             return (
                 "FROM python:3.12-slim\n"
                 "WORKDIR /app\n"

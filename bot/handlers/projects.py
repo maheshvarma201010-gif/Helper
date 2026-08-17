@@ -5,9 +5,13 @@ from bot.database.mongo import db
 from bot.utils.security import auth_filter
 from bot.utils.github_check import check_user_github_connection
 from bot.utils.render_api import RenderAPI, RenderAPIError
+from bot.utils.docker_inspector import DockerInspector
 from bot.utils.formatter import format_service_card
 
 logger = logging.getLogger(__name__)
+
+# State dictionary for change branch/repo: {user_id: {"service_id": str, "action": str, ...}}
+SERVICE_EDIT_SESSIONS = {}
 
 @Client.on_message(filters.command("projects") & auth_filter)
 async def list_projects_command(client: Client, message: Message):
@@ -58,7 +62,6 @@ async def display_projects_list(client: Client, chat_id: int, user_id: int, mess
         else:
             await client.send_message(chat_id, err)
 
-@Client.on_callback_query(filters.regex("^view_service_(.+) $") & auth_filter)
 @Client.on_callback_query(filters.regex("^view_service_(.+)$") & auth_filter)
 async def view_service_callback(client: Client, callback_query: CallbackQuery):
     srv_id = callback_query.matches[0].group(1).strip()
@@ -83,6 +86,10 @@ async def view_service_callback(client: Client, callback_query: CallbackQuery):
                 InlineKeyboardButton("🔁 Restart", callback_data=f"restart_{srv_id}")
             ],
             [
+                InlineKeyboardButton("🌿 Change Branch", callback_data=f"chg_branch_{srv_id}"),
+                InlineKeyboardButton("🔗 Change Repo", callback_data=f"chg_repo_{srv_id}")
+            ],
+            [
                 InlineKeyboardButton("⏸ Suspend", callback_data=f"suspend_{srv_id}"),
                 InlineKeyboardButton("▶️ Resume", callback_data=f"resume_{srv_id}")
             ],
@@ -96,6 +103,115 @@ async def view_service_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.edit_text(card_text, reply_markup=kb)
     except RenderAPIError as e:
         await callback_query.answer(f"Error: {e.message}", show_alert=True)
+
+@Client.on_callback_query(filters.regex("^chg_branch_(.+)$") & auth_filter)
+async def change_branch_prompt(client: Client, callback_query: CallbackQuery):
+    srv_id = callback_query.matches[0].group(1).strip()
+    user_id = callback_query.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    render = RenderAPI(api_key)
+
+    try:
+        service = await render.get_service(srv_id)
+        srv = service.get("service", service)
+        repo_url = srv.get("repo", "")
+        parsed = DockerInspector.parse_github_url(repo_url)
+
+        if parsed:
+            owner, repo_name = parsed
+            branches = await DockerInspector.fetch_repo_branches(owner, repo_name)
+            buttons = []
+            row = []
+            for idx, b in enumerate(branches[:10]):
+                row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"set_branch_{srv_id}_{b}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"view_service_{srv_id}")])
+
+            await callback_query.message.edit_text(
+                f"🌿 <b>Select New Branch for {srv.get('name')}:</b>\nCurrent repo: <code>{owner}/{repo_name}</code>",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        else:
+            SERVICE_EDIT_SESSIONS[user_id] = {"service_id": srv_id, "action": "SET_BRANCH"}
+            await callback_query.message.edit_text(
+                "🌿 <b>Change Branch:</b>\nPlease send the new branch name (e.g. <code>dev</code> or <code>main</code>):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"view_service_{srv_id}")]])
+            )
+
+    except RenderAPIError as e:
+        await callback_query.answer(f"Error: {e.message}", show_alert=True)
+
+@Client.on_callback_query(filters.regex("^set_branch_([^_]+)_(.+)$") & auth_filter)
+async def set_branch_callback(client: Client, callback_query: CallbackQuery):
+    srv_id = callback_query.matches[0].group(1)
+    new_branch = callback_query.matches[0].group(2)
+    user_id = callback_query.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    render = RenderAPI(api_key)
+
+    try:
+        await render.update_service(srv_id, {"branch": new_branch})
+        await render.redeploy_service(srv_id)
+        await db.log_action(user_id, "UPDATE_SERVICE_BRANCH", {"service_id": srv_id, "branch": new_branch})
+        await callback_query.answer(f"✅ Branch updated to {new_branch} & redeployment triggered!", show_alert=True)
+
+        # Reload card
+        service = await render.get_service(srv_id)
+        card_text = format_service_card(service)
+        await callback_query.message.edit_text(card_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Service", callback_data=f"view_service_{srv_id}")]]))
+    except RenderAPIError as e:
+        await callback_query.answer(f"Failed to change branch: {e.message}", show_alert=True)
+
+@Client.on_callback_query(filters.regex("^chg_repo_(.+)$") & auth_filter)
+async def change_repo_prompt(client: Client, callback_query: CallbackQuery):
+    srv_id = callback_query.matches[0].group(1).strip()
+    user_id = callback_query.from_user.id
+    SERVICE_EDIT_SESSIONS[user_id] = {"service_id": srv_id, "action": "SET_REPO"}
+
+    await callback_query.message.edit_text(
+        "🔗 <b>Change Repository:</b>\n"
+        "Please send the new GitHub Repository URL:\n"
+        "<i>Example: https://github.com/owner/new-repo</i>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"view_service_{srv_id}")]])
+    )
+
+@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
+async def project_edit_input_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    session = SERVICE_EDIT_SESSIONS.get(user_id)
+    if not session:
+        return
+
+    srv_id = session["service_id"]
+    action = session["action"]
+    text = message.text.strip()
+    api_key = await db.get_user_render_key(user_id)
+    render = RenderAPI(api_key)
+
+    try:
+        if action == "SET_BRANCH":
+            await render.update_service(srv_id, {"branch": text})
+            await render.redeploy_service(srv_id)
+            SERVICE_EDIT_SESSIONS.pop(user_id, None)
+            await message.reply_text(f"✅ Branch updated to <code>{text}</code> & service redeployed!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Service", callback_data=f"view_service_{srv_id}")]]))
+
+        elif action == "SET_REPO":
+            parsed = DockerInspector.parse_github_url(text)
+            if not parsed:
+                await message.reply_text("❌ Invalid GitHub URL format. Please send a valid URL.")
+                return
+
+            await render.update_service(srv_id, {"repo": text})
+            await render.redeploy_service(srv_id)
+            SERVICE_EDIT_SESSIONS.pop(user_id, None)
+            await message.reply_text(f"✅ Repository updated to <code>{text}</code> & service redeployed!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Service", callback_data=f"view_service_{srv_id}")]]))
+
+    except RenderAPIError as e:
+        await message.reply_text(f"❌ Failed to update service: {e.message}")
 
 @Client.on_callback_query(filters.regex("^redeploy_(.+)$") & auth_filter)
 async def redeploy_callback(client: Client, callback_query: CallbackQuery):

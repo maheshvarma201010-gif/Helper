@@ -38,7 +38,6 @@ def get_service_type_keyboard() -> InlineKeyboardMarkup:
 async def deploy_command(client: Client, message: Message):
     user_id = message.from_user.id
 
-    # Check GitHub / Render Connection first
     connected, error_msg, keyboard = await check_user_github_connection(user_id)
     if not connected:
         await message.reply_text(error_msg, reply_markup=keyboard)
@@ -86,8 +85,8 @@ async def deploy_mode_callback(client: Client, callback_query: CallbackQuery):
     mode_title = "🐳 Dockerfile Deployment" if session["is_docker"] else "🛠 Standard Deployment"
     await callback_query.message.edit_text(
         f"<b>{mode_title}</b>\n\n"
-        "Please send the GitHub Repository URL:\n"
-        "<i>Example: https://github.com/owner/repository</i>",
+        "Please send GitHub Owner / Repo URL or GitHub Username:\n"
+        "<i>Examples: https://github.com/owner/repository OR just owner_username</i>",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
         ])
@@ -128,28 +127,28 @@ async def wizard_text_input_handler(client: Client, message: Message):
 
     if step == "AWAIT_REPO":
         parsed = DockerInspector.parse_github_url(text)
-        if not parsed:
-            await message.reply_text("❌ Invalid GitHub URL. Please send a valid link (e.g., https://github.com/owner/repo).")
-            return
+        if parsed:
+            owner, repo_name = parsed
+            session["repo"] = text
+            session["owner"] = owner
+            session["repo_name"] = repo_name
+            await fetch_and_show_branches(client, message.chat.id, user_id, session)
+        else:
+            # Treat text as username to list available repos
+            owner = text.lstrip("@").strip()
+            msg = await message.reply_text(f"🔍 Fetching repositories for <code>{owner}</code>...")
+            repos = await DockerInspector.fetch_user_repos(owner)
+            if not repos:
+                await msg.edit_text("❌ No public repositories found or invalid URL. Please send full repo URL.")
+                return
 
-        session["repo"] = text
-        session["owner"] = parsed[0]
-        session["repo_name"] = parsed[1]
-        session["step"] = "AWAIT_BRANCH"
-        DEPLOY_SESSIONS[user_id] = session
-
-        await message.reply_text(
-            f"✅ Repository set: <code>{parsed[0]}/{parsed[1]}</code>\n\n"
-            "Please enter the branch name (e.g. <code>main</code> or <code>master</code>):",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Main", callback_data="set_branch_main"),
-                 InlineKeyboardButton("Master", callback_data="set_branch_master")]
-            ])
-        )
-
-    elif step == "AWAIT_BRANCH":
-        session["branch"] = text
-        await proceed_after_branch(client, message.chat.id, user_id, session)
+            session["owner"] = owner
+            session["user_repos"] = repos
+            buttons = []
+            for r in repos[:10]: # Top 10 repos
+                buttons.append([InlineKeyboardButton(f"📦 {r['name']}", callback_data=f"select_user_repo_{r['name']}")])
+            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
+            await msg.edit_text("📦 <b>Available Repositories:</b>\nSelect a repository to deploy:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif step == "AWAIT_SERVICE_NAME":
         session["name"] = text
@@ -205,14 +204,57 @@ async def wizard_text_input_handler(client: Client, message: Message):
         DEPLOY_SESSIONS[user_id] = session
         await show_deployment_preview(client, message.chat.id, user_id)
 
-@Client.on_callback_query(filters.regex("^set_branch_(main|master)$") & auth_filter)
-async def branch_quick_select(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^select_user_repo_(.+)$") & auth_filter)
+async def select_user_repo_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    branch = callback_query.matches[0].group(1)
+    repo_name = callback_query.matches[0].group(1).strip()
     session = DEPLOY_SESSIONS.get(user_id)
     if not session:
         return
+
+    owner = session["owner"]
+    session["repo_name"] = repo_name
+    session["repo"] = f"https://github.com/{owner}/{repo_name}"
+    await callback_query.message.edit_text(f"✅ Repository selected: <code>{owner}/{repo_name}</code>")
+    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session)
+
+async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
+    owner = session["owner"]
+    repo_name = session["repo_name"]
+    session["step"] = "AWAIT_BRANCH_SELECT"
+
+    msg = await client.send_message(chat_id, f"🌿 Fetching branches for <code>{owner}/{repo_name}</code>...")
+    branches = await DockerInspector.fetch_repo_branches(owner, repo_name)
+    session["fetched_branches"] = branches
+    DEPLOY_SESSIONS[user_id] = session
+
+    buttons = []
+    row = []
+    for idx, b in enumerate(branches[:12]):
+        row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"select_branch_{idx}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
+
+    await msg.edit_text(
+        f"🌿 <b>Available Branches for {owner}/{repo_name}:</b>\nSelect a branch to deploy:",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+@Client.on_callback_query(filters.regex("^select_branch_(\\d+)$") & auth_filter)
+async def select_branch_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    idx = int(callback_query.matches[0].group(1))
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or "fetched_branches" not in session:
+        return
+
+    branch = session["fetched_branches"][idx]
     session["branch"] = branch
+    await callback_query.message.edit_text(f"✅ Selected Branch: <code>{branch}</code>")
     await proceed_after_branch(client, callback_query.message.chat.id, user_id, session)
 
 async def proceed_after_branch(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
@@ -221,7 +263,6 @@ async def proceed_after_branch(client: Client, chat_id: int, user_id: int, sessi
     branch = session.get("branch", "main")
 
     if session.get("is_docker"):
-        # Detect Dockerfiles in repo
         status_msg = await client.send_message(chat_id, "🔍 Inspecting repository for Dockerfile...")
         detected = await DockerInspector.detect_dockerfiles(owner, repo_name, branch)
 
@@ -247,7 +288,6 @@ async def proceed_after_branch(client: Client, chat_id: int, user_id: int, sessi
                 ])
             )
         else:
-            # Multiple Dockerfiles
             buttons = [[InlineKeyboardButton(df, callback_data=f"select_df_{idx}")] for idx, df in enumerate(detected)]
             buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
             session["detected_dockerfiles"] = detected
@@ -256,7 +296,6 @@ async def proceed_after_branch(client: Client, chat_id: int, user_id: int, sessi
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
     else:
-        # Standard deploy
         session["step"] = "SELECT_SERVICE_TYPE"
         await client.send_message(
             chat_id,
@@ -423,7 +462,6 @@ async def confirm_deploy_callback(client: Client, callback_query: CallbackQuery)
         srv_name = srv.get("name")
         srv_url = srv.get("serviceDetails", {}).get("url", "")
 
-        # Save record to DB
         await db.save_deployment(
             user_id=user_id,
             service_id=srv_id,

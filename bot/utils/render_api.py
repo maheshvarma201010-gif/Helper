@@ -39,7 +39,6 @@ class RenderAPI:
                 raise RenderAPIError(500, f"Network connection error: {str(e)}")
 
     async def get_owner_id(self) -> Optional[str]:
-        """Fetches the primary owner/user/team ID for the Render API key."""
         try:
             owners = await self._request("GET", "/owners")
             if isinstance(owners, list) and len(owners) > 0:
@@ -57,12 +56,11 @@ class RenderAPI:
     async def get_service(self, service_id: str) -> Dict[str, Any]:
         return await self._request("GET", f"/services/{service_id}")
 
+    async def update_service(self, service_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Updates a service (e.g. branch, repo, build details)."""
+        return await self._request("PATCH", f"/services/{service_id}", json_data=updates)
+
     async def create_service(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Creates a new service on Render.
-        Specifically distinguishes Docker deployments from standard deployments.
-        For Docker deployments, DOES NOT send buildCommand or startCommand.
-        """
         owner_id = config.get("ownerId")
         if not owner_id:
             owner_id = await self.get_owner_id()
