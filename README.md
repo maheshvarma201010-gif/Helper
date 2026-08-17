@@ -1,80 +1,74 @@
-# Telegram Forward & Watermark Bot
+# Render Deployer Bot — Telegram Bot for Render & Docker Deployments
 
-A powerful Telegram bot designed for automated message forwarding with custom buttons, Unicode caption filtering, and advanced image watermarking.
+An advanced, production-ready Telegram Bot built with Python, Pyrogram, MongoDB, and the Render REST API to deploy and manage services on Render directly from Telegram.
 
 ## Features
 
-### 🚀 Advanced Forwarding
-- **String Session Support (`/ss`):** Securely use your own Telegram account for forwarding. Access private channels and restricted content.
-- **Range Forwarding (`/forward`):** Cleanly copy a range of messages between any two links.
-- **Reposting:** All forwarded messages are "reposted" (copied) to the target channel, removing the original forward attribution.
-- **Interactive Mode:**
-  - **Auto Mode:** Uses pre-configured button names (from `/auto`) and prompts for links.
-  - **Manual Mode:** Fully customize buttons (names, links, rows) for individual posts.
-- **Unicode Filtering:** Filter content by specific text in any language (Telugu, Hindi, Tamil, English, etc.) within captions or filenames.
-- **Media Group Support:** Correct handling of albums (multiple photos/videos).
-- **Trace Mode:** Real-time monitoring of source channels to automatically forward new posts as they arrive.
+### 🐳 Advanced Dockerfile Deployments
+When user selects **🐳 Deploy with Dockerfile**:
+- **NO Build or Start Commands requested**
+- Render Docker runtime configuration (`env: "docker"`)
+- Automatic repository Dockerfile detection and selection
+- `🔍 Check Dockerfile` validation
+- `🛠 Fix Dockerfile` with interactive diff preview
+- `🛠 Generate Dockerfile` for repos missing a Dockerfile
+- Configurable Dockerfile Path, Docker Context, and Environment Variables
 
-### 🔘 Button Management
-- **Persistent Setup (`/auto`):** Configure default button names and row layouts once and reuse them during forwarding.
-- **Interactive UI:** Guided setup flows for all configurations.
+### 🛠 Standard Deployments
+- Interactive deployment wizard for Web Services, Background Workers, Cron Jobs, and Static Sites
+- Build Command and Start Command setup
+- Branch and Instance / Region configuration
 
-### 🖼️ TEdit (Image Watermarking)
-- **Automatic Monitoring:** Auto-watermark new posts in monitored channels.
-- **Multiple Watermark Types:** Support for Logos (images), Stickers, and Custom Text.
-- **Dynamic Styling:** Configure font size, position, transparency, and color.
-- **Proportional Scaling:** Watermarks automatically scale based on the source image dimensions.
+### ⚙️ Environment Variables Management
+- View, Add, Edit, Delete, and Bulk Import (`KEY=value`) environment variables
+- Mask secret values in Telegram messages (`KEY=****123`)
+- Zero disclosure of secrets, API keys, or bot tokens in logs
 
-### 🛠️ Utilities
-- **Font Stylizer:** Apply various Unicode fonts to text.
-- **Text Replacer:** Strict, multi-pass text replacement logic for captions.
-- **Auto Join:** Automatically joins source channels using invite links.
-- **FloodWait Protection:** Intelligent retry logic for Telegram API limits.
+### 🔗 GitHub Authorization Integration
+- Verifies Render & GitHub connection prior to deployment
+- Direct GitHub OAuth link (`https://github.com/apps/render/installations/new`)
 
-## Installation
+### 📊 Service Management & Control
+- `/projects` — List connected Render services
+- `/status` — View real-time status badges (`🟢 RUNNING`, `🔄 DEPLOYING`, `🟡 BUILDING`, `🔴 FAILED`, `⚪ STOPPED`)
+- `/logs` — View recent deployment logs
+- `/restart` — Restart service
+- `/redeploy` — Trigger fresh deployment
+- `/stop` — Suspend service
+- `/delete` — Safely delete service with strong confirmation
+
+## Local Setup
 
 ### Prerequisites
 - Python 3.12+
 - MongoDB
-- Telegram API ID and Hash (from [my.telegram.org](https://my.telegram.org))
-- Bot Token (from [@BotFather](https://t.me/BotFather))
+- Telegram API ID, Hash, and Bot Token
 
-### Local Setup
-1. Clone the repository:
+### Installation
+1. Clone repository:
    ```bash
-   git clone https://github.com/username/forward-bot.git
-   cd forward-bot
+   git clone https://github.com/your-username/render-deployer-bot.git
+   cd render-deployer-bot
    ```
 2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-3. Create a `.env` file based on `.env.example`:
+3. Copy `.env.example` to `.env` and configure credentials:
    ```env
-   API_ID=your_api_id
+   API_ID=123456
    API_HASH=your_api_hash
    BOT_TOKEN=your_bot_token
-   MONGO_URI=your_mongodb_uri
+   MONGO_URI=mongodb://localhost:27017/render_deployer
    ```
 4. Run the bot:
    ```bash
-   python -m bot
+   python -m bot.bot
    ```
 
-## Usage
+## Deployment on Render
 
-### Commands
-- `/start` - Start the bot.
-- `/ss <session>` - Save your Pyrogram String Session.
-- `/auto` - Configure default button names and layout.
-- `/forward` - Start the range forwarding wizard.
-- `/tedit` - Access the watermarking setup menu.
-- `/replace` - Configure text replacement rules.
-- `/font` - Stylize text with custom fonts.
-
-## Deployment
-This bot is Docker-ready and can be deployed on platforms like Render, Heroku, or VPS.
-Refer to `Dockerfile` and `render.yaml` for configuration.
+This bot itself is Docker-ready and can be deployed directly on Render using `render.yaml` or Dockerfile deployment option!
 
 ## License
-MIT License
+MIT
