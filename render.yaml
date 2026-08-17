@@ -1,26 +1,21 @@
 services:
   - type: web
-    name: telegram-file-sequencer
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m bot.bot
-    plan: free
+    name: render-deployer-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
     envVars:
-      - key: BOT_TOKEN
-        sync: false
       - key: API_ID
         sync: false
       - key: API_HASH
         sync: false
+      - key: BOT_TOKEN
+        sync: false
       - key: MONGO_URI
         sync: false
-      - key: LOG_CHANNEL
+      - key: RENDER_API_KEY
         sync: false
-      - key: OWNER_ID
-        sync: false
-      - key: ADMINS
-        sync: false
-      - key: PORT
-        sync: false
-      - key: REPLACE_TEXT_CHANNELS
-        sync: false
+      - key: ENCRYPTION_SECRET
+        generateValue: true

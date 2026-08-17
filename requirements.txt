@@ -4,9 +4,6 @@ motor
 dnspython
 python-dotenv
 aiohttp
-aiohttp-jinja2
-jinja2
-cloudscraper
 requests
-beautifulsoup4
-Pillow
+pytest
+pytest-asyncio

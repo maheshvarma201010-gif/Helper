@@ -1,265 +1,122 @@
+import logging
+import base64
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient
 from bot.config import Config
 
+logger = logging.getLogger(__name__)
+
 class Database:
     def __init__(self):
-        self.client = AsyncIOMotorClient(Config.MONGO_URI)
-        self.db = self.client["telegram_bot"]
-        self.users = self.db["users"]
-        self.sessions = self.db["sessions"]
-        self.jobs = self.db["jobs"]
-        self.sequences = self.db["sequences"]
-        self.replace_jobs = self.db["replace_jobs"]
-        self.domain_jobs = self.db["domain_jobs"]
-        self.forward_jobs = self.db["forward_jobs"]
-        self.button_configs = self.db["button_configs"]
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db = None
 
-        # New collections for Userbot and Search
-        self.settings = self.db["settings"]
-        self.channels = self.db["channels"]
-        self.indexes = self.db["indexes"]
-        self.search_cache = self.db["search_cache"]
-        self.batches = self.db["batches"]
-        self.fonts = self.db["fonts"]
-        self.tedit_settings = self.db["tedit_settings"]
-        self.tedit_jobs = self.db["tedit_jobs"]
-        self.tedit_monitoring = self.db["tedit_monitoring"]
-        self.auto_approve = self.db["auto_approve"]
+    def connect(self):
+        if not self.client:
+            self.client = AsyncIOMotorClient(Config.MONGO_URI)
+            self.db = self.client.get_default_database(default="render_deployer")
+            logger.info("Connected to MongoDB")
 
-    async def get_user(self, user_id):
-        return await self.users.find_one({"user_id": user_id})
+    def _obfuscate(self, secret: str) -> str:
+        """Simple reversible encoding for API key storage in database."""
+        if not secret:
+            return ""
+        key_bytes = Config.ENCRYPTION_SECRET.encode('utf-8')
+        secret_bytes = secret.encode('utf-8')
+        xor_bytes = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(secret_bytes)])
+        return base64.b64encode(xor_bytes).decode('utf-8')
 
-    async def add_user(self, user_id, first_name):
-        if not await self.get_user(user_id):
-            await self.users.insert_one({"user_id": user_id, "first_name": first_name})
+    def _deobfuscate(self, encoded: str) -> str:
+        if not encoded:
+            return ""
+        try:
+            xor_bytes = base64.b64decode(encoded.encode('utf-8'))
+            key_bytes = Config.ENCRYPTION_SECRET.encode('utf-8')
+            secret_bytes = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(xor_bytes)])
+            return secret_bytes.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Failed to deobfuscate secret: {e}")
+            return ""
 
-    async def update_user_state(self, user_id, state):
-        await self.users.update_one({"user_id": user_id}, {"$set": {"state": state}}, upsert=True)
+    async def get_user_render_key(self, user_id: int) -> Optional[str]:
+        self.connect()
+        doc = await self.db.users.find_one({"user_id": user_id})
+        if doc and doc.get("render_api_key"):
+            return self._deobfuscate(doc["render_api_key"])
+        # Fall back to global config key if set
+        return Config.RENDER_API_KEY or None
 
-    async def get_user_state(self, user_id):
-        user = await self.users.find_one({"user_id": user_id})
-        return user.get("state") if user else None
-
-    # Sessions
-    async def set_session(self, user_id, string_session):
-        await self.sessions.update_one({"user_id": user_id}, {"$set": {"session": string_session}}, upsert=True)
-
-    async def get_session(self, user_id):
-        data = await self.sessions.find_one({"user_id": user_id})
-        return data["session"] if data else None
-
-    # Button Configurations
-    async def set_button_config(self, user_id, config):
-        await self.button_configs.update_one({"user_id": user_id}, {"$set": config}, upsert=True)
-
-    async def get_button_config(self, user_id):
-        return await self.button_configs.find_one({"user_id": user_id})
-
-    async def delete_button_config(self, user_id):
-        await self.button_configs.delete_one({"user_id": user_id})
-
-    # Forward Jobs
-    async def add_forward_job(self, job_data):
-        if "message_queue" not in job_data:
-            job_data["message_queue"] = []
-        await self.forward_jobs.insert_one(job_data)
-
-    async def update_forward_job(self, job_id, update_data):
-        await self.forward_jobs.update_one({"job_id": job_id}, {"$set": update_data})
-
-    async def get_forward_job(self, job_id):
-        return await self.forward_jobs.find_one({"job_id": job_id})
-
-    async def get_active_forward_job(self, user_id):
-        return await self.forward_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued", "waiting_input"]}})
-
-    async def get_all_active_forward_jobs(self):
-        return await self.forward_jobs.find({"status": {"$in": ["running", "paused", "queued", "waiting_input"]}}).to_list(length=None)
-
-    async def append_to_forward_queue(self, job_id, message_id):
-        await self.forward_jobs.update_one({"job_id": job_id}, {"$push": {"message_queue": message_id}})
-
-    async def pop_from_forward_queue(self, job_id):
-        job = await self.forward_jobs.find_one_and_update(
-            {"job_id": job_id, "message_queue": {"$exists": True, "$not": {"$size": 0}}},
-            {"$pop": {"message_queue": -1}},
-            return_document=True
-        )
-        return job["message_queue"][0] if job and "message_queue" in job and len(job["message_queue"]) > 0 else None
-
-    # Traces
-    async def add_trace(self, trace_data):
-        await self.db["traces"].update_one(
-            {"user_id": trace_data["user_id"], "source_chat": trace_data["source_chat"]},
-            {"$set": trace_data},
-            upsert=True
-        )
-
-    async def get_all_traces(self):
-        return await self.db["traces"].find().to_list(length=None)
-
-    async def remove_trace(self, user_id, source_chat):
-        await self.db["traces"].delete_one({"user_id": user_id, "source_chat": source_chat})
-
-    # Settings and Channels
-    async def set_source_channel(self, channel_id):
-        await self.settings.update_one({"key": "source_channel"}, {"$set": {"value": channel_id}}, upsert=True)
-
-    async def get_source_channel(self):
-        setting = await self.settings.find_one({"key": "source_channel"})
-        return setting["value"] if setting else None
-
-    async def set_batch_bot(self, username):
-        await self.settings.update_one({"key": "batch_bot"}, {"$set": {"value": username}}, upsert=True)
-
-    async def get_batch_bot(self):
-        setting = await self.settings.find_one({"key": "batch_bot"})
-        return setting["value"] if setting else None
-
-    # Global task lock for Domain Replacement
-    async def is_domain_job_running(self):
-        job = await self.settings.find_one({"key": "domain_job_active"})
-        return job["value"] if job else False
-
-    async def set_domain_job_status(self, status):
-        await self.settings.update_one({"key": "domain_job_active"}, {"$set": {"value": status}}, upsert=True)
-
-    # Domain Job Data
-    async def update_domain_data(self, user_id, data):
-        await self.domain_jobs.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
-
-    async def get_domain_data(self, user_id):
-        return await self.domain_jobs.find_one({"user_id": user_id})
-
-    async def clear_domain_data(self, user_id):
-        await self.domain_jobs.delete_one({"user_id": user_id})
-
-    # Indexing
-    async def add_index(self, data):
-        await self.indexes.update_one(
-            {"chat_id": data["chat_id"], "message_id": data["message_id"]},
-            {"$set": data},
-            upsert=True
-        )
-
-    async def get_latest_indexed_id(self, chat_id):
-        latest = await self.indexes.find_one({"chat_id": chat_id}, sort=[("message_id", -1)])
-        return latest["message_id"] if latest else 0
-
-    async def get_recent_posts(self, hours=24):
-        import datetime
-        since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=hours)
-        return await self.indexes.find({"timestamp": {"$gte": since}}).sort("timestamp", -1).to_list(length=100)
-
-    async def get_all_indexed(self, limit=100, skip=0):
-        return await self.indexes.find().sort("message_id", -1).skip(skip).to_list(length=limit)
-
-    async def search_index(self, query_filter):
-        return await self.indexes.find(query_filter).to_list(length=1000)
-
-    # Sequence and Replace methods
-    async def add_sequence_file(self, user_id, file_data):
-        await self.sequences.update_one({"user_id": user_id}, {"$push": {"files": file_data}}, upsert=True)
-
-    async def get_sequence_files(self, user_id):
-        job = await self.sequences.find_one({"user_id": user_id})
-        return job.get("files", []) if job else []
-
-    async def clear_sequence_files(self, user_id):
-        await self.sequences.delete_one({"user_id": user_id})
-
-    async def update_replace_data(self, user_id, data):
-        await self.replace_jobs.update_one({"user_id": user_id}, {"$set": data}, upsert=True)
-
-    async def get_replace_data(self, user_id):
-        return await self.replace_jobs.find_one({"user_id": user_id})
-
-    async def clear_replace_data(self, user_id):
-        await self.replace_jobs.delete_one({"user_id": user_id})
-
-    # Font Settings
-    async def set_channel_font(self, channel_id, font_style):
-        await self.fonts.update_one(
-            {"channel_id": channel_id},
-            {"$set": {"font_style": font_style}},
-            upsert=True
-        )
-
-    async def get_channel_font(self, channel_id):
-        data = await self.fonts.find_one({"channel_id": channel_id})
-        return data["font_style"] if data else None
-
-    async def delete_channel_font(self, channel_id):
-        await self.fonts.delete_one({"channel_id": channel_id})
-
-    # TEdit Settings
-    async def set_tedit_settings(self, user_id, settings):
-        await self.tedit_settings.update_one({"user_id": user_id}, {"$set": settings}, upsert=True)
-
-    async def get_tedit_settings(self, user_id):
-        return await self.tedit_settings.find_one({"user_id": user_id})
-
-    # TEdit Jobs
-    async def add_tedit_job(self, job_data):
-        await self.tedit_jobs.insert_one(job_data)
-
-    async def update_tedit_job(self, job_id, update_data):
-        await self.tedit_jobs.update_one({"job_id": job_id}, {"$set": update_data})
-
-    async def get_tedit_job(self, job_id):
-        return await self.tedit_jobs.find_one({"job_id": job_id})
-
-    async def get_active_tedit_job(self, user_id):
-        return await self.tedit_jobs.find_one({"user_id": user_id, "status": {"$in": ["running", "paused", "queued"]}})
-
-    async def get_all_active_tedit_jobs(self):
-        return await self.tedit_jobs.find({"status": {"$in": ["running", "paused", "queued"]}}).to_list(length=None)
-
-    # TEdit Monitoring
-    async def set_tedit_monitoring(self, user_id, channel_id, status=True, settings=None):
-        if status:
-            update_data = {"active": True}
-            if settings:
-                update_data["settings"] = settings
-            await self.tedit_monitoring.update_one(
-                {"user_id": user_id, "channel_id": channel_id},
-                {"$set": update_data},
-                upsert=True
-            )
-        else:
-            await self.tedit_monitoring.delete_one({"user_id": user_id, "channel_id": channel_id})
-
-    async def get_tedit_monitoring(self, channel_id):
-        return await self.tedit_monitoring.find({"channel_id": channel_id, "active": True}).to_list(length=None)
-
-    async def get_user_monitoring(self, user_id):
-        return await self.tedit_monitoring.find({"user_id": user_id, "active": True}).to_list(length=None)
-
-    # Auto Approve
-    async def set_auto_approve(self, chat_id, status: bool):
-        await self.auto_approve.update_one(
-            {"chat_id": chat_id},
-            {"$set": {"active": status}},
-            upsert=True
-        )
-
-    async def get_auto_approve(self, chat_id):
-        data = await self.auto_approve.find_one({"chat_id": chat_id})
-        return data["active"] if data else False
-
-    async def reset_user(self, user_id):
-        """Resets user state and temporary data to prevent state collision."""
-        await self.update_user_state(user_id, None)
-        await self.users.update_one(
+    async def set_user_render_key(self, user_id: int, api_key: str):
+        self.connect()
+        enc_key = self._obfuscate(api_key)
+        await self.db.users.update_one(
             {"user_id": user_id},
-            {"$unset": {
-                "temp_btn_wiz": "",
-                "temp_dm_links": "",
-                "temp_manual": "",
-                "temp_replace": ""
-            }}
+            {"$set": {"render_api_key": enc_key, "updated_at": datetime.utcnow()}},
+            upsert=True
         )
-        # Also clear temporary job data if any
-        await self.replace_jobs.delete_one({"user_id": user_id})
+
+    async def remove_user_render_key(self, user_id: int):
+        self.connect()
+        await self.db.users.update_one(
+            {"user_id": user_id},
+            {"$unset": {"render_api_key": ""}, "$set": {"updated_at": datetime.utcnow()}}
+        )
+
+    async def save_deployment(self, user_id: int, service_id: str, service_name: str, repo_url: str, branch: str, service_type: str, is_docker: bool, status: str, service_url: Optional[str] = None):
+        self.connect()
+        record = {
+            "user_id": user_id,
+            "service_id": service_id,
+            "service_name": service_name,
+            "repo_url": repo_url,
+            "branch": branch,
+            "service_type": service_type,
+            "is_docker": is_docker,
+            "status": status,
+            "service_url": service_url,
+            "updated_at": datetime.utcnow()
+        }
+        await self.db.deployments.update_one(
+            {"user_id": user_id, "service_id": service_id},
+            {"$set": record, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True
+        )
+
+    async def get_user_deployments(self, user_id: int) -> List[Dict[str, Any]]:
+        self.connect()
+        cursor = self.db.deployments.find({"user_id": user_id}).sort("updated_at", -1)
+        return await cursor.to_list(length=100)
+
+    async def remove_deployment(self, user_id: int, service_id: str):
+        self.connect()
+        await self.db.deployments.delete_one({"user_id": user_id, "service_id": service_id})
+
+    async def log_action(self, user_id: int, action: str, details: Dict[str, Any]):
+        self.connect()
+        log_entry = {
+            "user_id": user_id,
+            "action": action,
+            "details": details,
+            "timestamp": datetime.utcnow()
+        }
+        await self.db.audit_logs.insert_one(log_entry)
+
+    async def is_authorized_user(self, user_id: int) -> bool:
+        if not Config.ADMIN_IDS:
+            return True  # If no admin IDs specified, open to standard allowed users
+        if user_id in Config.ADMIN_IDS:
+            return True
+        self.connect()
+        doc = await self.db.authorized_users.find_one({"user_id": user_id})
+        return doc is not None
+
+    async def authorize_user(self, user_id: int):
+        self.connect()
+        await self.db.authorized_users.update_one(
+            {"user_id": user_id},
+            {"$set": {"authorized_at": datetime.utcnow()}},
+            upsert=True
+        )
 
 db = Database()
