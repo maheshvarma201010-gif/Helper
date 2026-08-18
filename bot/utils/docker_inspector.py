@@ -95,8 +95,6 @@ class DockerInspector:
                     logger.warning(f"Failed to fetch branches page {page} for {owner}/{repo}: {e}")
                     break
 
-        if not branches:
-            branches = ["main", "master"]
         return branches
 
     @staticmethod

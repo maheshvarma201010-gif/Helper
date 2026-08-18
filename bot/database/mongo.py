@@ -43,7 +43,7 @@ class Database:
         doc = await self.db.users.find_one({"user_id": user_id})
         if doc and doc.get("render_api_key"):
             return self._deobfuscate(doc["render_api_key"])
-        return Config.RENDER_API_KEY or None
+        return None
 
     async def set_user_render_key(self, user_id: int, api_key: str):
         self.connect()
@@ -117,13 +117,9 @@ class Database:
         await self.db.audit_logs.insert_one(log_entry)
 
     async def is_authorized_user(self, user_id: int) -> bool:
-        if not Config.ADMIN_IDS:
-            return True
-        if user_id in Config.ADMIN_IDS:
-            return True
-        self.connect()
-        doc = await self.db.authorized_users.find_one({"user_id": user_id})
-        return doc is not None
+        # Every user (admin or non-admin) is allowed to use the bot with their own keys.
+        # Admin IDs can be used for administrative operations if needed, but non-admins are allowed.
+        return True
 
     async def authorize_user(self, user_id: int):
         self.connect()

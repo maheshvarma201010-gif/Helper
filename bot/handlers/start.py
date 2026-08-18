@@ -21,6 +21,7 @@ HELP_TEXT = (
     "📖 <b>Render Deployer Bot - Command Documentation</b>\n\n"
     "<b>Commands:</b>\n"
     "• /start - Welcome menu and available actions\n"
+    "• /create_repo - Import or create a repository and deploy\n"
     "• /deploy - Start a new application deployment\n"
     "• /repos - View & deploy public and private GitHub repositories\n"
     "• /projects - List connected Render services\n"
@@ -38,18 +39,19 @@ HELP_TEXT = (
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy"),
-            InlineKeyboardButton("📦 My Repos", callback_data="list_repos_0")
+            InlineKeyboardButton("🛠 Create/Import Repo", callback_data="open_create_repo"),
+            InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy")
         ],
         [
-            InlineKeyboardButton("📂 Projects", callback_data="list_projects"),
-            InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env")
+            InlineKeyboardButton("📦 My Repos", callback_data="list_repos_0"),
+            InlineKeyboardButton("📂 Projects", callback_data="list_projects")
         ],
         [
-            InlineKeyboardButton("🔗 Connect GitHub", url=GITHUB_AUTH_URL),
+            InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env"),
             InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")
         ],
         [
+            InlineKeyboardButton("🔗 Connect GitHub", url=GITHUB_AUTH_URL),
             InlineKeyboardButton("📖 Help", callback_data="show_help")
         ]
     ]
@@ -75,6 +77,17 @@ async def help_command(client: Client, message: Message):
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
         ])
+    )
+
+@Client.on_callback_query(filters.regex("^open_create_repo$") & auth_filter)
+async def open_create_repo_callback(client: Client, callback_query: CallbackQuery):
+    from bot.handlers.create_repo import get_create_repo_choice_keyboard, CREATE_REPO_SESSIONS
+    user_id = callback_query.from_user.id
+    CREATE_REPO_SESSIONS[user_id] = {"step": "CHOICE"}
+    await callback_query.message.edit_text(
+        "🛠 <b>Repository & Deployment Wizard (/create_repo)</b>\n\n"
+        "Would you like to <b>Import</b> an existing repository or <b>Create</b> a brand new repository?",
+        reply_markup=get_create_repo_choice_keyboard()
     )
 
 @Client.on_callback_query(filters.regex("^main_menu$") & auth_filter)
