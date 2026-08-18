@@ -349,8 +349,9 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
 
     buttons = []
     row = []
-    for b in page_branches:
-        row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"select_branch_name_{b}"))
+    for idx, b in enumerate(page_branches):
+        global_idx = start_idx + idx
+        row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"select_branch_idx_{global_idx}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -374,14 +375,21 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
     else:
         await client.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(buttons))
 
-@Client.on_callback_query(filters.regex("^select_branch_name_(.+)$") & auth_filter)
-async def select_branch_name_callback(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^select_branch_idx_(\\d+)$") & auth_filter)
+async def select_branch_idx_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    branch = callback_query.matches[0].group(1).strip()
+    idx = int(callback_query.matches[0].group(1))
     session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
+    if not session or "fetched_branches" not in session:
+        await callback_query.answer("Session expired.", show_alert=True)
         return
 
+    branches = session.get("fetched_branches", [])
+    if idx < 0 or idx >= len(branches):
+        await callback_query.answer("Invalid branch selection.", show_alert=True)
+        return
+
+    branch = branches[idx]
     session["branch"] = branch
     await callback_query.message.edit_text(f"✅ Selected Branch: <code>{branch}</code>")
     await proceed_after_branch(client, callback_query.message.chat.id, user_id, session)

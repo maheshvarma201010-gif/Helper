@@ -150,8 +150,8 @@ async def create_repo_text_handler(client: Client, message: Message):
         total_branches = len(branches)
         buttons = []
         row = []
-        for b in branches[:10]:
-            row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"cr_import_branch_{b}"))
+        for idx, b in enumerate(branches[:10]):
+            row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"cr_import_branch_idx_{idx}"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
@@ -279,15 +279,21 @@ async def skip_cr_env_vars_callback(client: Client, callback_query: CallbackQuer
     session["step"] = "CONFIRMATION"
     await show_cr_deployment_preview(client, callback_query.message.chat.id, user_id)
 
-@Client.on_callback_query(filters.regex("^cr_import_branch_(.+)$") & auth_filter)
-async def cr_import_branch_callback(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^cr_import_branch_idx_(\\d+)$") & auth_filter)
+async def cr_import_branch_idx_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    branch = callback_query.matches[0].group(1).strip()
+    idx = int(callback_query.matches[0].group(1))
     session = CREATE_REPO_SESSIONS.get(user_id)
-    if not session:
+    if not session or "fetched_branches" not in session:
         await callback_query.message.edit_text("❌ Session expired. Please run /create_repo again.")
         return
 
+    branches = session.get("fetched_branches", [])
+    if idx < 0 or idx >= len(branches):
+        await callback_query.answer("Invalid branch selection.", show_alert=True)
+        return
+
+    branch = branches[idx]
     session["branch"] = branch
     session["step"] = "IMPORT_AWAIT_SERVICE_NAME"
     default_name = sanitize_service_name(session.get("repo_name", "my-app"))
