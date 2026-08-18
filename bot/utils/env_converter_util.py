@@ -31,55 +31,67 @@ def convert_to_env(content: str) -> str:
         except Exception:
             pass
 
-    # Attempt 2: Safe Python AST Parsing with variable reference lookup
+    # Attempt 2: Full or Statement-by-Statement Python AST Parsing
     try:
         tree = ast.parse(content)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    key = None
-                    if isinstance(target, ast.Name):
-                        key = target.id
-                    elif isinstance(target, ast.Attribute):
-                        key = target.attr
-
-                    if key and not key.startswith("__"):
-                        val = _get_ast_value(node.value, env_dict)
-                        if val is not None and val != "Call()":
-                            env_dict[key] = str(val)
-            elif isinstance(node, ast.AnnAssign):
-                if isinstance(node.target, ast.Name) and not node.target.id.startswith("__"):
-                    key = node.target.id
-                    val = _get_ast_value(node.value, env_dict) if node.value else ""
-                    if val is not None and val != "Call()":
-                        env_dict[key] = str(val)
-
-        if env_dict:
-            return _format_env_dict(env_dict)
+        _extract_ast_nodes(tree, env_dict)
     except Exception:
-        pass
+        lines = content.splitlines()
+        stmt_buffer = []
+        for line in lines:
+            stmt_buffer.append(line)
+            try:
+                sub_tree = ast.parse("\n".join(stmt_buffer))
+                _extract_ast_nodes(sub_tree, env_dict)
+                stmt_buffer = []
+            except Exception:
+                if len(stmt_buffer) > 30:
+                    stmt_buffer.pop(0)
 
-    # Attempt 3: Regex Line-by-Line Parser for config.py / INI / PHP / YAML / .env
+    # Attempt 3: Line-by-Line Regex Parser (complements AST)
     for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("//") or line.startswith(";"):
+        line_s = line.strip()
+        if not line_s or line_s.startswith("#") or line_s.startswith("//") or line_s.startswith(";"):
             continue
 
-        define_match = re.match(r"^\s*define\s*\(\s*['\"]([A-Za-z0-9_]+)['\"]\s*,\s*(.+)\s*\)\s*;?\s*$", line)
+        define_match = re.match(r"^\s*define\s*\(\s*['\"]([A-Za-z0-9_]+)['\"]\s*,\s*(.+)\s*\)\s*;?\s*$", line_s)
         if define_match:
             k = define_match.group(1)
-            v = _clean_value_string(define_match.group(2), env_dict)
-            env_dict[k] = v
+            if k not in env_dict:
+                v = _clean_value_string(define_match.group(2), env_dict)
+                env_dict[k] = v
             continue
 
-        kv_match = re.match(r"^\s*(?:export\s+|\$|const\s+|var\s+)?([A-Za-z0-9_]+)\s*[:=]\s*(.+)$", line)
+        kv_match = re.match(r"^\s*(?:export\s+|\$|const\s+|var\s+)?([A-Za-z0-9_]+)\s*[:=]\s*(.+)$", line_s)
         if kv_match:
             k = kv_match.group(1)
             v_raw = kv_match.group(2)
-            v = _clean_value_string(v_raw, env_dict)
-            env_dict[k] = v
+            if k not in env_dict:
+                v = _clean_value_string(v_raw, env_dict)
+                env_dict[k] = v
 
     return _format_env_dict(env_dict)
+
+def _extract_ast_nodes(tree: ast.AST, env_dict: Dict[str, str]):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                key = None
+                if isinstance(target, ast.Name):
+                    key = target.id
+                elif isinstance(target, ast.Attribute):
+                    key = target.attr
+
+                if key and not key.startswith("__"):
+                    val = _get_ast_value(node.value, env_dict)
+                    if val is not None and val != "Call()":
+                        env_dict[key] = str(val)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and not node.target.id.startswith("__") and node.value is not None:
+                key = node.target.id
+                val = _get_ast_value(node.value, env_dict)
+                if val is not None and val != "Call()":
+                    env_dict[key] = str(val)
 
 def _get_ast_value(node: ast.AST, env_dict: Optional[Dict[str, str]] = None) -> Any:
     if node is None:

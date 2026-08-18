@@ -85,6 +85,14 @@ PORT=8080 // JS comment
     assert parsed.get("KEY2") == "value2"
     assert parsed.get("PORT") == "8080"
 
+def test_convert_unlimited_100_plus_variables():
+    large_config = "\n".join([f"VAR_{i} = 'value_{i}'" for i in range(120)])
+    res = convert_to_env(large_config)
+    parsed = parse_env_input(res)
+    assert len(parsed) == 120
+    assert parsed.get("VAR_0") == "value_0"
+    assert parsed.get("VAR_119") == "value_119"
+
 def test_convert_to_env_empty():
     assert convert_to_env("") == ""
     assert convert_to_env("   \n\n  ") == ""
