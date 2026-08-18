@@ -62,18 +62,24 @@ async def env_converter_document_handler(client: Client, message: Message):
 
         ENV_CONVERTER_SESSIONS.pop(user_id, None)
 
+        task_num = message.id
+        filename = f"env_{user_id}_{task_num}.py"
+
         if len(converted) < 3500:
             await msg.edit_text(
-                f"✅ <b>Converted Environment Variables:</b>\n\n<code>{converted}</code>",
+                f"✅ <b>Converted Environment Variables (Saved as <code>{filename}</code>):</b>\n\n<code>{converted}</code>",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⚙️ Manage Render Env Vars", callback_data="manage_env")]
                 ])
             )
-        else:
-            await msg.edit_text("✅ <b>Converted Environment Variables:</b> (Sending `.env` file...)")
             bio = io.BytesIO(converted.encode("utf-8"))
-            bio.name = "converted.env"
-            await message.reply_document(document=bio, caption="✅ Converted environment variables file")
+            bio.name = filename
+            await message.reply_document(document=bio, caption=f"✅ Converted file: <code>{filename}</code>")
+        else:
+            await msg.edit_text(f"✅ <b>Converted Environment Variables:</b> (Sending <code>{filename}</code>...)")
+            bio = io.BytesIO(converted.encode("utf-8"))
+            bio.name = filename
+            await message.reply_document(document=bio, caption=f"✅ Converted file: <code>{filename}</code>")
 
     except Exception as e:
         logger.error(f"Error converting document in /env_converter: {e}")
@@ -96,14 +102,20 @@ async def env_converter_text_handler(client: Client, message: Message):
 
     ENV_CONVERTER_SESSIONS.pop(user_id, None)
 
+    task_num = message.id
+    filename = f"env_{user_id}_{task_num}.py"
+
     if len(converted) < 3500:
         await message.reply_text(
-            f"✅ <b>Converted Environment Variables:</b>\n\n<code>{converted}</code>",
+            f"✅ <b>Converted Environment Variables (Saved as <code>{filename}</code>):</b>\n\n<code>{converted}</code>",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚙️ Manage Render Env Vars", callback_data="manage_env")]
             ])
         )
+        bio = io.BytesIO(converted.encode("utf-8"))
+        bio.name = filename
+        await message.reply_document(document=bio, caption=f"✅ Converted file: <code>{filename}</code>")
     else:
         bio = io.BytesIO(converted.encode("utf-8"))
-        bio.name = "converted.env"
-        await message.reply_document(document=bio, caption="✅ Converted environment variables file")
+        bio.name = filename
+        await message.reply_document(document=bio, caption=f"✅ Converted file: <code>{filename}</code>")

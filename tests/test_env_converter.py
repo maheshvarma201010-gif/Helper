@@ -46,6 +46,33 @@ DATABASE_URI = postgresql://user:pass@localhost:5432/db
     assert "SECRET_KEY=supersecretvalue" in res
     assert "DATABASE_URI=postgresql://user:pass@localhost:5432/db" in res
 
+def test_convert_to_env_codeflix_config():
+    codeflix_config = """
+import os
+from os import getenv
+
+TG_BOT_TOKEN = getenv("TG_BOT_TOKEN", "123456:ABC-DEF")
+APP_ID = int(getenv("APP_ID", "12345"))
+API_HASH = getenv("API_HASH", "abc123hash")
+CHANNEL_ID = int(getenv("CHANNEL_ID", "-100123456"))
+OWNER = getenv("OWNER", "codeflix")
+OWNER_ID = int(getenv("OWNER_ID", "98765"))
+PORT = int(os.environ.get("PORT", "8080"))
+ANIME_BANNERS = ["https://telegra.ph/file/1.jpg", "https://telegra.ph/file/2.jpg"]
+PICS = ANIME_BANNERS
+"""
+    res = convert_to_env(codeflix_config)
+    assert "TG_BOT_TOKEN=123456:ABC-DEF" in res
+    assert "APP_ID=12345" in res
+    assert "API_HASH=abc123hash" in res
+    assert "CHANNEL_ID=-100123456" in res
+    assert "OWNER=codeflix" in res
+    assert "OWNER_ID=98765" in res
+    assert "PORT=8080" in res
+    assert 'ANIME_BANNERS=["https://telegra.ph/file/1.jpg", "https://telegra.ph/file/2.jpg"]' in res
+    assert 'PICS=["https://telegra.ph/file/1.jpg", "https://telegra.ph/file/2.jpg"]' in res
+    assert "Call()" not in res
+
 def test_convert_to_env_empty():
     assert convert_to_env("") == ""
     assert convert_to_env("   \n\n  ") == ""
