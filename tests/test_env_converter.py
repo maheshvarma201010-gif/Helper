@@ -1,5 +1,5 @@
 import pytest
-from bot.utils.env_converter_util import convert_to_env
+from bot.utils.env_converter_util import convert_to_env, parse_env_input
 from bot.utils.formatter import sanitize_service_name
 
 def test_sanitize_service_name():
@@ -72,6 +72,18 @@ PICS = ANIME_BANNERS
     assert 'ANIME_BANNERS=["https://telegra.ph/file/1.jpg", "https://telegra.ph/file/2.jpg"]' in res
     assert 'PICS=["https://telegra.ph/file/1.jpg", "https://telegra.ph/file/2.jpg"]' in res
     assert "Call()" not in res
+
+def test_parse_env_input_with_comments_and_quotes():
+    raw_input = """
+# Comment line
+KEY1="value1" # Inline comment
+export KEY2 = 'value2'
+PORT=8080 // JS comment
+"""
+    parsed = parse_env_input(raw_input)
+    assert parsed.get("KEY1") == "value1"
+    assert parsed.get("KEY2") == "value2"
+    assert parsed.get("PORT") == "8080"
 
 def test_convert_to_env_empty():
     assert convert_to_env("") == ""

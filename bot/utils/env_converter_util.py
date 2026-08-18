@@ -190,6 +190,34 @@ def _clean_value_string(val_str: str, env_dict: Optional[Dict[str, str]] = None)
 
     return val_str
 
+def parse_env_input(text: str) -> Dict[str, str]:
+    """
+    Parses environment variables from any input text (including comments, export statements,
+    config.py files, JSON, YAML, or raw .env format) into a dictionary of KEY -> value.
+    """
+    if not text or not text.strip():
+        return {}
+
+    converted = convert_to_env(text)
+    res = {}
+    for line in converted.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if " #" in v:
+                v = v.split(" #", 1)[0].strip()
+            if " //" in v:
+                v = v.split(" //", 1)[0].strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            if k:
+                res[k] = v
+    return res
+
 def _format_env_dict(env_dict: Dict[str, str]) -> str:
     lines = []
     for k, v in env_dict.items():

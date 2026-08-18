@@ -8,6 +8,7 @@ from bot.utils.github_check import check_user_github_connection
 from bot.utils.docker_inspector import DockerInspector
 from bot.utils.render_api import RenderAPI, RenderAPIError
 from bot.utils.formatter import format_deployment_preview, sanitize_service_name
+from bot.utils.env_converter_util import parse_env_input
 
 logger = logging.getLogger(__name__)
 
@@ -258,11 +259,7 @@ async def wizard_text_input_handler(client: Client, message: Message):
         )
 
     elif step == "AWAIT_ENV_VARS":
-        parsed_vars = {}
-        for line in text.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                parsed_vars[k.strip()] = v.strip()
+        parsed_vars = parse_env_input(text)
         session["env_vars"].update(parsed_vars)
         session["step"] = "CONFIRMATION"
         DEPLOY_SESSIONS[user_id] = session
