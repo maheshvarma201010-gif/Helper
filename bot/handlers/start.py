@@ -22,6 +22,7 @@ HELP_TEXT = (
     "<b>Commands:</b>\n"
     "• /start - Welcome menu and available actions\n"
     "• /create_repo - Import or create a repository and deploy\n"
+    "• /zip - Deploy project directly from .zip archive\n"
     "• /deploy - Start a new application deployment\n"
     "• /repos - View & deploy public and private GitHub repositories\n"
     "• /projects - List connected Render services\n"

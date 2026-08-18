@@ -33,6 +33,7 @@ class RenderDeployerBot(Client):
         await self.set_bot_commands([
             BotCommand("start", "Show welcome menu"),
             BotCommand("create_repo", "Import or create a repository"),
+            BotCommand("zip", "Deploy project from .zip archive"),
             BotCommand("deploy", "Start a new deployment"),
             BotCommand("projects", "List connected Render services"),
             BotCommand("status", "Show status of services"),

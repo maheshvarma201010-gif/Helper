@@ -72,6 +72,16 @@ async def test_user_render_key_isolation():
     key = await db.get_user_render_key(12345)
     assert key is None
 
+def test_get_zip_plan_keyboard():
+    from bot.handlers.zip_deploy import get_zip_plan_keyboard
+    kb = get_zip_plan_keyboard()
+    assert kb is not None
+    assert len(kb.inline_keyboard) == 2
+    buttons = kb.inline_keyboard[0]
+    assert len(buttons) == 2
+    assert "Free" in buttons[0].text
+    assert "Starter" in buttons[1].text
+
 @pytest.mark.asyncio
 async def test_api_services_endpoint():
     from aiohttp.test_utils import TestClient, TestServer
