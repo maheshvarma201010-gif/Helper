@@ -47,6 +47,24 @@ MINIAPP_HTML = """<!DOCTYPE html>
             align-items: center;
             gap: 8px;
         }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-num {
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 4px;
+        }
         .theme-toggle {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -112,6 +130,21 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <button class="theme-toggle" onclick="toggleTheme()">🌓 Theme</button>
     </div>
 
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div style="font-size: 12px; color: var(--text-muted);">Total Services</div>
+            <div class="stat-num" id="stat-total">1</div>
+        </div>
+        <div class="stat-card">
+            <div style="font-size: 12px; color: var(--text-muted);">Running</div>
+            <div class="stat-num" style="color: #10b981;" id="stat-running">1</div>
+        </div>
+        <div class="stat-card">
+            <div style="font-size: 12px; color: var(--text-muted);">Stopped/Other</div>
+            <div class="stat-num" style="color: #f59e0b;" id="stat-stopped">0</div>
+        </div>
+    </div>
+
     <div id="services-list">
         <div class="card">
             <div class="card-header">
@@ -120,7 +153,6 @@ MINIAPP_HTML = """<!DOCTYPE html>
             </div>
             <div class="details">
                 <div><b>Type:</b> Web Service (Docker)</div>
-                <div><b>Region:</b> Oregon</div>
                 <div><b>Repo:</b> github.com/owner/render-bot</div>
             </div>
             <div class="btn-group">
@@ -162,6 +194,51 @@ async def health_check_handler(request):
             status=500
         )
 
+async def api_services_handler(request):
+    user_id_str = request.query.get("user_id")
+    if not user_id_str or not user_id_str.isdigit():
+        return web.Response(
+            text=json.dumps({"status": "error", "message": "Valid user_id parameter required"}),
+            content_type="application/json",
+            status=400
+        )
+
+    user_id = int(user_id_str)
+    try:
+        deployments = await db.get_user_deployments(user_id)
+        services_data = []
+        for d in deployments:
+            services_data.append({
+                "service_id": d.get("service_id"),
+                "service_name": d.get("service_name"),
+                "repo_url": d.get("repo_url"),
+                "branch": d.get("branch", "main"),
+                "service_type": d.get("service_type", "web_service"),
+                "is_docker": d.get("is_docker", False),
+                "status": d.get("status", "created"),
+                "service_url": d.get("service_url")
+            })
+
+        total = len(services_data)
+        running = sum(1 for s in services_data if s["status"] in ["live", "created", "running"])
+        stopped = total - running
+
+        return web.Response(
+            text=json.dumps({
+                "status": "success",
+                "summary": {"total": total, "running": running, "stopped": stopped},
+                "services": services_data
+            }),
+            content_type="application/json",
+            status=200
+        )
+    except Exception as e:
+        return web.Response(
+            text=json.dumps({"status": "error", "message": str(e)}),
+            content_type="application/json",
+            status=500
+        )
+
 async def miniapp_handler(request):
     return web.Response(text=MINIAPP_HTML, content_type="text/html")
 
@@ -170,4 +247,5 @@ def create_web_app() -> web.Application:
     app.router.add_get("/", health_check_handler)
     app.router.add_get("/health", health_check_handler)
     app.router.add_get("/miniapp", miniapp_handler)
+    app.router.add_get("/api/services", api_services_handler)
     return app

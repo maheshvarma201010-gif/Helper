@@ -160,9 +160,18 @@ async def create_repo_text_handler(client: Client, message: Message):
     elif step == "IMPORT_AWAIT_SERVICE_NAME":
         service_name = text
         session["service_name"] = service_name
-        session["step"] = "IMPORT_STARTING"
+        session["step"] = "AWAIT_ENV_VARS"
 
-        await start_import_process(client, message.chat.id, user_id, session)
+        await message.reply_text(
+            f"✅ Service Name: <code>{service_name}</code>\n\n"
+            "⚙️ <b>Environment Variables (Optional):</b>\n"
+            "Send environment variables in <code>KEY=value</code> format (one per line).\n"
+            "Or click 'Skip Env Vars' to proceed directly to Render deployment.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_cr_env_vars")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
+            ])
+        )
 
     # ---------------- CREATE FLOW ----------------
     elif step == "CREATE_AWAIT_REPO_NAME":
@@ -201,17 +210,44 @@ async def create_repo_text_handler(client: Client, message: Message):
         session["owner"] = owner
         session["repo"] = html_url
         session["branch"] = created_repo.get("default_branch", "main")
+        session["service_name"] = repo_name
+        session["step"] = "AWAIT_ENV_VARS"
 
         await msg.edit_text(
             f"✅ <b>Repository Created Successfully on GitHub!</b>\n\n"
             f"<b>Repository:</b> <code>{full_name}</code>\n"
             f"<b>URL:</b> {html_url}\n\n"
-            f"Now deploying to Render...",
-            disable_web_page_preview=True
+            "⚙️ <b>Environment Variables (Optional):</b>\n"
+            "Send environment variables in <code>KEY=value</code> format (one per line).\n"
+            "Or click 'Skip Env Vars' to proceed directly to Render deployment.",
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_cr_env_vars")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
+            ])
         )
 
-        # Transition into deployment session
-        await start_create_import_deployment(client, message.chat.id, user_id, session)
+    elif step == "AWAIT_ENV_VARS":
+        parsed_vars = {}
+        for line in text.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                parsed_vars[k.strip()] = v.strip()
+        session["env_vars"].update(parsed_vars)
+        session["step"] = "STARTING"
+        await start_import_process(client, message.chat.id, user_id, session)
+
+@Client.on_callback_query(filters.regex("^skip_cr_env_vars$") & auth_filter)
+async def skip_cr_env_vars_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = CREATE_REPO_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired. Please run /create_repo again.")
+        return
+
+    session["step"] = "STARTING"
+    await callback_query.message.edit_text("⏳ <b>Starting deployment to Render...</b>")
+    await start_create_import_deployment(client, callback_query.message.chat.id, user_id, session)
 
 @Client.on_callback_query(filters.regex("^cr_import_branch_(.+)$") & auth_filter)
 async def cr_import_branch_callback(client: Client, callback_query: CallbackQuery):
@@ -274,7 +310,8 @@ async def start_create_import_deployment(client: Client, chat_id: int, user_id: 
         "type": "web_service",
         "is_docker": is_docker,
         "dockerfilePath": dockerfilePath,
-        "dockerContext": "."
+        "dockerContext": ".",
+        "env_vars": session.get("env_vars", {})
     }
 
     try:

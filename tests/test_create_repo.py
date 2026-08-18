@@ -71,3 +71,27 @@ async def test_user_render_key_isolation():
 
     key = await db.get_user_render_key(12345)
     assert key is None
+
+@pytest.mark.asyncio
+async def test_api_services_endpoint():
+    from aiohttp.test_utils import TestClient, TestServer
+    from bot.web.server import create_web_app
+    from bot.database.mongo import db
+
+    db.get_user_deployments = AsyncMock(return_value=[])
+
+    app = create_web_app()
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    resp = await client.get("/api/services?user_id=invalid")
+    assert resp.status == 400
+
+    resp_valid = await client.get("/api/services?user_id=12345")
+    assert resp_valid.status == 200
+    data = await resp_valid.json()
+    assert data["status"] == "success"
+    assert "summary" in data
+    assert "services" in data
+
+    await client.close()
