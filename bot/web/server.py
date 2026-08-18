@@ -216,7 +216,10 @@ async def api_services_handler(request):
                 "service_type": d.get("service_type", "web_service"),
                 "is_docker": d.get("is_docker", False),
                 "status": d.get("status", "created"),
-                "service_url": d.get("service_url")
+                "service_url": d.get("service_url"),
+                "uptime_status": d.get("uptime_status", "UNKNOWN"),
+                "last_check_code": d.get("last_check_code", 0),
+                "latency_ms": d.get("latency_ms", 0.0)
             })
 
         total = len(services_data)

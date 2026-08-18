@@ -5,6 +5,7 @@ from aiohttp import web
 from bot.config import Config
 from bot.database.mongo import db
 from bot.web.server import create_web_app
+from bot.utils.uptime_monitor import UptimeMonitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +49,10 @@ class RenderDeployerBot(Client):
             BotCommand("help", "Show command documentation")
         ])
 
+        # Start Uptime Kuma style background monitor
+        self.uptime_monitor = UptimeMonitor(bot_client=self, check_interval=60)
+        self.uptime_monitor.start()
+
         # Start Health Check Server
         app = create_web_app()
         runner = web.AppRunner(app)
@@ -57,6 +62,8 @@ class RenderDeployerBot(Client):
         logger.info(f"Health check web server running on port {Config.PORT}")
 
     async def stop(self, *args):
+        if hasattr(self, "uptime_monitor"):
+            self.uptime_monitor.stop()
         await super().stop()
         logger.info("Render Deployer Bot stopped.")
 

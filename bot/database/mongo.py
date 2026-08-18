@@ -102,6 +102,32 @@ class Database:
         cursor = self.db.deployments.find({"user_id": user_id}).sort("updated_at", -1)
         return await cursor.to_list(length=100)
 
+    async def get_all_deployments(self) -> List[Dict[str, Any]]:
+        self.connect()
+        cursor = self.db.deployments.find().sort("updated_at", -1)
+        return await cursor.to_list(length=1000)
+
+    async def save_uptime_status(self, service_id: str, is_up: bool, status_code: int, latency_ms: float):
+        self.connect()
+        now = datetime.utcnow()
+        uptime_status = "UP" if is_up else "DOWN"
+        await self.db.deployments.update_one(
+            {"service_id": service_id},
+            {"$set": {
+                "uptime_status": uptime_status,
+                "last_check_code": status_code,
+                "latency_ms": round(latency_ms, 2),
+                "last_check_time": now
+            }}
+        )
+        await self.db.uptime_logs.insert_one({
+            "service_id": service_id,
+            "status": uptime_status,
+            "status_code": status_code,
+            "latency_ms": round(latency_ms, 2),
+            "timestamp": now
+        })
+
     async def remove_deployment(self, user_id: int, service_id: str):
         self.connect()
         await self.db.deployments.delete_one({"user_id": user_id, "service_id": service_id})
