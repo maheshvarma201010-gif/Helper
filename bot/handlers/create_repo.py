@@ -311,6 +311,7 @@ async def start_create_import_deployment(client: Client, chat_id: int, user_id: 
         "is_docker": is_docker,
         "dockerfilePath": dockerfilePath,
         "dockerContext": ".",
+        "instance_type": session.get("instance_type", "free"),
         "env_vars": session.get("env_vars", {})
     }
 

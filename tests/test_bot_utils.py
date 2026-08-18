@@ -75,3 +75,39 @@ def test_status_badges():
 async def test_docker_inspector_branches_empty_on_failure():
     branches = await DockerInspector.fetch_repo_branches("nonexistent_user_12345", "nonexistent_repo_67890")
     assert branches == []
+
+@pytest.mark.asyncio
+async def test_fetch_user_repos_pagination():
+    from unittest.mock import AsyncMock, patch, MagicMock
+
+    # Create 150 dummy repos split across page 1 (100 items) and page 2 (50 items)
+    page1_repos = [{"name": f"repo_{i}", "full_name": f"user/repo_{i}", "html_url": f"https://github.com/user/repo_{i}", "private": False} for i in range(100)]
+    page2_repos = [{"name": f"repo_{i}", "full_name": f"user/repo_{i}", "html_url": f"https://github.com/user/repo_{i}", "private": False} for i in range(100, 150)]
+
+    mock_resp_p1 = AsyncMock()
+    mock_resp_p1.status = 200
+    mock_resp_p1.json = AsyncMock(return_value=page1_repos)
+
+    mock_resp_p2 = AsyncMock()
+    mock_resp_p2.status = 200
+    mock_resp_p2.json = AsyncMock(return_value=page2_repos)
+
+    get_ctx1 = MagicMock()
+    get_ctx1.__aenter__ = AsyncMock(return_value=mock_resp_p1)
+    get_ctx1.__aexit__ = AsyncMock(return_value=None)
+
+    get_ctx2 = MagicMock()
+    get_ctx2.__aenter__ = AsyncMock(return_value=mock_resp_p2)
+    get_ctx2.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session_instance = MagicMock()
+    mock_session_instance.get.side_effect = [get_ctx1, get_ctx2]
+
+    session_ctx = MagicMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+    session_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=session_ctx):
+        repos = await DockerInspector.fetch_user_repos("testuser", github_token="ghp_test_123")
+        assert repos is not None
+        assert len(repos) == 150

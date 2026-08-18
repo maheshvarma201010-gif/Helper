@@ -36,32 +36,44 @@ class DockerInspector:
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "RenderDeployerBot"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token.strip()}"
-            api_url = "https://api.github.com/user/repos?visibility=all&per_page=100&sort=updated"
-        else:
-            api_url = f"https://api.github.com/users/{owner.strip()}/repos?per_page=100&sort=updated"
 
         repos = []
+        page = 1
         async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(api_url, headers=headers, timeout=12) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if isinstance(data, list):
-                            for r in data:
-                                repos.append({
-                                    "name": r.get("name"),
-                                    "full_name": r.get("full_name"),
-                                    "html_url": r.get("html_url"),
-                                    "private": r.get("private", False),
-                                    "default_branch": r.get("default_branch", "main")
-                                })
-                            return repos
-                    else:
-                        logger.warning(f"GitHub API HTTP {resp.status} for user repos: {await resp.text()}")
+            while page <= 10:  # Fetch up to 1000 repositories across pages
+                if github_token:
+                    api_url = f"https://api.github.com/user/repos?visibility=all&per_page=100&page={page}&sort=updated"
+                else:
+                    api_url = f"https://api.github.com/users/{owner.strip()}/repos?per_page=100&page={page}&sort=updated"
+
+                try:
+                    async with session.get(api_url, headers=headers, timeout=12) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                for r in data:
+                                    repos.append({
+                                        "name": r.get("name"),
+                                        "full_name": r.get("full_name"),
+                                        "html_url": r.get("html_url"),
+                                        "private": r.get("private", False),
+                                        "default_branch": r.get("default_branch", "main")
+                                    })
+                                if len(data) < 100:
+                                    break
+                                page += 1
+                            else:
+                                break
+                        else:
+                            logger.warning(f"GitHub API HTTP {resp.status} for user repos page {page}: {await resp.text()}")
+                            if page == 1:
+                                return None
+                            break
+                except Exception as e:
+                    logger.warning(f"Failed to fetch user repos page {page}: {e}")
+                    if page == 1:
                         return None
-            except Exception as e:
-                logger.warning(f"Failed to fetch user repos: {e}")
-                return None
+                    break
         return repos
 
     @staticmethod

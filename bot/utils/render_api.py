@@ -71,7 +71,7 @@ class RenderAPI:
 
         service_details: Dict[str, Any] = {
             "region": config.get("region", "oregon"),
-            "plan": config.get("instance_type", "starter"),
+            "plan": config.get("instance_type", "free"),
             "envVars": env_vars_list
         }
 

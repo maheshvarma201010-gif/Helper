@@ -37,28 +37,26 @@ HELP_TEXT = (
 )
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    miniapp_url = f"https://localhost/miniapp" if Config.PORT == 443 else f"https://render.com"
+
     buttons = [
         [
-            InlineKeyboardButton("🛠 Create/Import Repo", callback_data="open_create_repo"),
-            InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy")
+            InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=miniapp_url)),
+            InlineKeyboardButton("🛠 Create/Import Repo", callback_data="open_create_repo")
         ],
         [
-            InlineKeyboardButton("📦 My Repos", callback_data="list_repos_0"),
-            InlineKeyboardButton("📂 Projects", callback_data="list_projects")
+            InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy"),
+            InlineKeyboardButton("📦 My Repos", callback_data="list_repos_0")
         ],
         [
-            InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")
+            InlineKeyboardButton("📂 Projects", callback_data="list_projects"),
+            InlineKeyboardButton("⚙️ Env Vars", callback_data="manage_env")
         ],
         [
-            InlineKeyboardButton("🔗 Connect GitHub", url=GITHUB_AUTH_URL),
+            InlineKeyboardButton("⚙️ Settings", callback_data="open_settings"),
             InlineKeyboardButton("📖 Help", callback_data="show_help")
         ]
     ]
-
-    # Only include WebAppInfo button if HTTPS is configured, preventing Telegram WebApp URL validation errors
-    if Config.PORT == 443:
-        buttons.insert(1, [InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=f"https://localhost/miniapp"))])
 
     return InlineKeyboardMarkup(buttons)
 
