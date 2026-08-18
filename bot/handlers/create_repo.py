@@ -7,6 +7,8 @@ from bot.database.mongo import db
 from bot.utils.security import auth_filter
 from bot.utils.docker_inspector import DockerInspector
 from bot.utils.render_api import RenderAPI, RenderAPIError
+from bot.utils.formatter import sanitize_service_name, format_deployment_preview
+from bot.utils.env_converter_util import parse_env_input
 from bot.handlers.deploy import DEPLOY_SESSIONS, fetch_and_show_branches
 
 logger = logging.getLogger(__name__)
@@ -128,22 +130,29 @@ async def create_repo_text_handler(client: Client, message: Message):
         branches = await DockerInspector.fetch_repo_branches(owner, repo_short, github_token=gh_token)
 
         if not branches:
+            branches = ["main"]
+
+        session["fetched_branches"] = branches
+        if len(branches) == 1:
+            session["branch"] = branches[0]
+            session["step"] = "IMPORT_AWAIT_SERVICE_NAME"
+            default_name = sanitize_service_name(repo_short)
             await msg.edit_text(
-                f"❌ <b>Could not fetch branches for {owner}/{repo_short}.</b>\n\n"
-                f"Please verify repository permissions or check your GitHub token in /settings.",
+                f"✅ Auto-selected Branch: <code>{branches[0]}</code>\n\n"
+                f"📥 <b>Import Repository</b>\n"
+                f"Please enter the service name, or click Skip to use default (<code>{default_name}</code>):",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
+                    [InlineKeyboardButton(f"Skip (Default: {default_name})", callback_data="skip_cr_service_name")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
                 ])
             )
             return
 
-        session["fetched_branches"] = branches
         total_branches = len(branches)
         buttons = []
         row = []
-        for b in branches[:10]:
-            row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"cr_import_branch_{b}"))
+        for idx, b in enumerate(branches[:10]):
+            row.append(InlineKeyboardButton(f"🌿 {b}", callback_data=f"cr_import_branch_idx_{idx}"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
@@ -158,15 +167,15 @@ async def create_repo_text_handler(client: Client, message: Message):
         )
 
     elif step == "IMPORT_AWAIT_SERVICE_NAME":
-        service_name = text
-        session["service_name"] = service_name
+        sanitized_name = sanitize_service_name(text, fallback=session.get("repo_name", "my-app"))
+        session["service_name"] = sanitized_name
         session["step"] = "AWAIT_ENV_VARS"
 
         await message.reply_text(
-            f"✅ Service Name: <code>{service_name}</code>\n\n"
+            f"✅ Service Name: <code>{sanitized_name}</code>\n\n"
             "⚙️ <b>Environment Variables (Optional):</b>\n"
             "Send environment variables in <code>KEY=value</code> format (one per line).\n"
-            "Or click 'Skip Env Vars' to proceed directly to Render deployment.",
+            "Or click 'Skip Env Vars' to proceed.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_cr_env_vars")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
@@ -228,14 +237,33 @@ async def create_repo_text_handler(client: Client, message: Message):
         )
 
     elif step == "AWAIT_ENV_VARS":
-        parsed_vars = {}
-        for line in text.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                parsed_vars[k.strip()] = v.strip()
+        parsed_vars = parse_env_input(text)
         session["env_vars"].update(parsed_vars)
-        session["step"] = "STARTING"
-        await start_import_process(client, message.chat.id, user_id, session)
+        session["step"] = "CONFIRMATION"
+        await show_cr_deployment_preview(client, message.chat.id, user_id)
+
+@Client.on_callback_query(filters.regex("^skip_cr_service_name$") & auth_filter)
+async def skip_cr_service_name_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = CREATE_REPO_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired. Please run /create_repo again.")
+        return
+
+    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
+    session["service_name"] = default_name
+    session["step"] = "AWAIT_ENV_VARS"
+
+    await callback_query.message.edit_text(
+        f"✅ Service Name: <code>{default_name}</code>\n\n"
+        "⚙️ <b>Environment Variables (Optional):</b>\n"
+        "Send environment variables in <code>KEY=value</code> format (one per line).\n"
+        "Or click 'Skip Env Vars' to proceed.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_cr_env_vars")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
+        ])
+    )
 
 @Client.on_callback_query(filters.regex("^skip_cr_env_vars$") & auth_filter)
 async def skip_cr_env_vars_callback(client: Client, callback_query: CallbackQuery):
@@ -245,31 +273,78 @@ async def skip_cr_env_vars_callback(client: Client, callback_query: CallbackQuer
         await callback_query.message.edit_text("❌ Session expired. Please run /create_repo again.")
         return
 
-    session["step"] = "STARTING"
-    await callback_query.message.edit_text("⏳ <b>Starting deployment to Render...</b>")
-    await start_create_import_deployment(client, callback_query.message.chat.id, user_id, session)
+    session["step"] = "CONFIRMATION"
+    await show_cr_deployment_preview(client, callback_query.message.chat.id, user_id)
 
-@Client.on_callback_query(filters.regex("^cr_import_branch_(.+)$") & auth_filter)
-async def cr_import_branch_callback(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^cr_import_branch_idx_(\\d+)$") & auth_filter)
+async def cr_import_branch_idx_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    branch = callback_query.matches[0].group(1).strip()
+    idx = int(callback_query.matches[0].group(1))
     session = CREATE_REPO_SESSIONS.get(user_id)
-    if not session:
+    if not session or "fetched_branches" not in session:
         await callback_query.message.edit_text("❌ Session expired. Please run /create_repo again.")
         return
 
+    branches = session.get("fetched_branches", [])
+    if idx < 0 or idx >= len(branches):
+        await callback_query.answer("Invalid branch selection.", show_alert=True)
+        return
+
+    branch = branches[idx]
     session["branch"] = branch
     session["step"] = "IMPORT_AWAIT_SERVICE_NAME"
+    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
 
     await callback_query.message.edit_text(
         f"✅ Selected Branch: <code>{branch}</code>\n\n"
-        f"📥 <b>Import Repository (3/4)</b>\n"
-        f"Please enter the name for your service/repository deployment:\n"
-        f"<i>Example: {session.get('repo_name', 'my-app')}</i>",
+        f"📥 <b>Import Repository</b>\n"
+        f"Please enter the name for your service, or click Skip to use default (<code>{default_name}</code>):",
         reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Skip (Default: {default_name})", callback_data="skip_cr_service_name")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")]
         ])
     )
+
+async def show_cr_deployment_preview(client: Client, chat_id: int, user_id: int):
+    session = CREATE_REPO_SESSIONS.get(user_id)
+    if not session:
+        return
+
+    config = {
+        "name": session.get("service_name", session.get("repo_name", "my-app")),
+        "type": "web_service",
+        "repo": session.get("repo"),
+        "branch": session.get("branch", "main"),
+        "region": "oregon",
+        "instance_type": session.get("instance_type", "free"),
+        "is_docker": True,
+        "dockerfilePath": "./Dockerfile",
+        "dockerContext": ".",
+        "env_vars": session.get("env_vars", {})
+    }
+
+    preview_text = format_deployment_preview(config)
+    await client.send_message(
+        chat_id,
+        preview_text,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚀 Confirm & Deploy", callback_data="confirm_cr_deploy"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel_create_repo")
+            ]
+        ])
+    )
+
+@Client.on_callback_query(filters.regex("^confirm_cr_deploy$") & auth_filter)
+async def confirm_cr_deploy_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = CREATE_REPO_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired.")
+        return
+
+    msg = await callback_query.message.edit_text("⏳ <b>Starting deployment to Render...</b>")
+    await start_create_import_deployment(client, callback_query.message.chat.id, user_id, session, message_to_edit=msg)
 
 async def start_import_process(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
     msg = await client.send_message(chat_id, "⏳ <b>Starting repository import and setup...</b>")

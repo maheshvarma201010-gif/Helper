@@ -1,4 +1,26 @@
+import re
 from typing import Dict, Any, Optional
+
+def sanitize_service_name(name: str, fallback: str = "app-service") -> str:
+    """
+    Sanitizes service name for Render API requirements:
+    - Lowercase
+    - Alphanumeric characters and hyphens only
+    - Max 63 characters
+    - Non-empty
+    """
+    if not name or not isinstance(name, str):
+        name = fallback or "app-service"
+
+    cleaned = name.lower()
+    cleaned = re.sub(r'[^a-z0-9-]+', '-', cleaned)
+    cleaned = re.sub(r'-+', '-', cleaned).strip('-')
+
+    if not cleaned:
+        fallback_clean = re.sub(r'[^a-z0-9-]+', '-', (fallback or "app-service").lower()).strip('-')
+        cleaned = fallback_clean or "app-service"
+
+    return cleaned[:63].strip('-') or "app-service"
 
 STATUS_BADGES = {
     "live": "🟢 RUNNING",

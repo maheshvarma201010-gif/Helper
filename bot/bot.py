@@ -43,6 +43,7 @@ class RenderDeployerBot(Client):
             BotCommand("stop", "Suspend a service"),
             BotCommand("delete", "Delete a service"),
             BotCommand("env", "View and manage environment variables"),
+            BotCommand("env_converter", "Convert config files to .env format"),
             BotCommand("settings", "Configure Render API key"),
             BotCommand("help", "Show command documentation")
         ])

@@ -5,6 +5,7 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineK
 from bot.database.mongo import db
 from bot.utils.security import auth_filter, mask_secret, mask_env_vars
 from bot.utils.render_api import RenderAPI, RenderAPIError
+from bot.utils.env_converter_util import parse_env_input
 
 logger = logging.getLogger(__name__)
 
@@ -162,10 +163,8 @@ async def env_input_handler(client: Client, message: Message):
         current_vars = await render.get_env_vars(srv_id)
 
         if action in ["ADD", "IMPORT"]:
-            for line in text.splitlines():
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    current_vars[k.strip()] = v.strip()
+            new_vars = parse_env_input(text)
+            current_vars.update(new_vars)
 
             await render.update_env_vars(srv_id, current_vars)
             await db.log_action(user_id, "UPDATE_ENV_VARS", {"service_id": srv_id, "action": action})
