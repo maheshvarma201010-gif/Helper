@@ -6,6 +6,7 @@ from bot.config import Config
 from bot.database.mongo import db
 from bot.web.server import create_web_app
 from bot.utils.uptime_monitor import UptimeMonitor
+from bot.utils.limit_notifier import FreeTierLimitNotifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,6 +56,10 @@ class RenderDeployerBot(Client):
         self.uptime_monitor = UptimeMonitor(bot_client=self, check_interval=60)
         self.uptime_monitor.start()
 
+        # Start Free Tier / Bandwidth Expiry Hourly Notifier
+        self.limit_notifier = FreeTierLimitNotifier(bot_client=self, check_interval=3600)
+        self.limit_notifier.start()
+
         # Start Health Check Server
         app = create_web_app()
         runner = web.AppRunner(app)
@@ -64,6 +69,8 @@ class RenderDeployerBot(Client):
         logger.info(f"Health check web server running on port {Config.PORT}")
 
     async def stop(self, *args):
+        if hasattr(self, "limit_notifier"):
+            self.limit_notifier.stop()
         if hasattr(self, "uptime_monitor"):
             self.uptime_monitor.stop()
         await super().stop()

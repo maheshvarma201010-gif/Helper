@@ -45,6 +45,11 @@ class Database:
             return self._deobfuscate(doc["render_api_key"])
         return None
 
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        self.connect()
+        cursor = self.db.users.find({"render_api_key": {"$exists": True, "$ne": ""}})
+        return await cursor.to_list(length=1000)
+
     async def set_user_render_key(self, user_id: int, api_key: str):
         self.connect()
         enc_key = self._obfuscate(api_key)
