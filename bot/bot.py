@@ -45,6 +45,7 @@ class RenderDeployerBot(Client):
             BotCommand("delete", "Delete a service"),
             BotCommand("env", "View and manage environment variables"),
             BotCommand("env_converter", "Convert config files to .env format"),
+            BotCommand("delete_branches", "Delete selected branches from GitHub repo"),
             BotCommand("settings", "Configure Render API key"),
             BotCommand("help", "Show command documentation")
         ])

@@ -79,6 +79,31 @@ class DockerInspector:
         return repos
 
     @staticmethod
+    async def delete_repo_branch(owner: str, repo: str, branch: str, github_token: str) -> bool:
+        """Deletes a branch from a GitHub repository using GitHub REST API."""
+        if not github_token:
+            return False
+
+        headers = {
+            "Authorization": f"Bearer {github_token.strip()}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "RenderDeployerBot"
+        }
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/heads/{branch.strip()}"
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.delete(api_url, headers=headers, timeout=12) as resp:
+                    if resp.status in [200, 202, 204]:
+                        return True
+                    else:
+                        logger.warning(f"Failed to delete branch {branch} in {owner}/{repo}: HTTP {resp.status}")
+                        return False
+            except Exception as e:
+                logger.error(f"Error calling GitHub delete branch API: {e}")
+                return False
+
+    @staticmethod
     async def fetch_repo_branches(owner: str, repo: str, github_token: Optional[str] = None) -> List[str]:
         """Fetches ALL branches for a GitHub repository handling multi-page results."""
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "RenderDeployerBot"}

@@ -34,6 +34,7 @@ HELP_TEXT = (
     "• /delete - Safely delete a service\n"
     "• /env - View and manage environment variables\n"
     "• /env_converter - Convert config files (config.py, .json, credentials) to .env\n"
+    "• /delete_branches - Select and delete branches from GitHub repository\n"
     "• /settings - Configure Render API token and GitHub PAT\n"
     "• /help - Show this help menu"
 )
