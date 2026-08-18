@@ -7,11 +7,20 @@ from bot.utils.security import auth_filter
 from bot.utils.github_check import check_user_github_connection
 from bot.utils.docker_inspector import DockerInspector
 from bot.utils.render_api import RenderAPI, RenderAPIError
-from bot.utils.formatter import format_deployment_preview
+from bot.utils.formatter import format_deployment_preview, sanitize_service_name
 
 logger = logging.getLogger(__name__)
 
 DEPLOY_SESSIONS: Dict[int, Dict[str, Any]] = {}
+
+def get_plan_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🆓 Free Plan ($0/mo)", callback_data="select_plan_free"),
+            InlineKeyboardButton("🚀 Starter Plan ($7/mo)", callback_data="select_plan_starter")
+        ],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+    ])
 
 def get_deployment_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -102,17 +111,70 @@ async def service_type_callback(client: Client, callback_query: CallbackQuery):
         return
 
     session["type"] = srv_type
-    session["step"] = "AWAIT_SERVICE_NAME"
+    session["step"] = "SELECT_PLAN"
     DEPLOY_SESSIONS[user_id] = session
 
     await callback_query.message.edit_text(
-        f"<b>Service Type:</b> {srv_type}\n\n"
-        "Please enter a unique Service Name:\n"
-        "<i>Example: my-app-api</i>",
+        f"<b>Service Type Selected:</b> {srv_type}\n\n"
+        "Please select your Render instance plan:",
+        reply_markup=get_plan_keyboard()
+    )
+
+@Client.on_callback_query(filters.regex("^select_plan_(free|starter)$") & auth_filter)
+async def select_plan_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    plan_choice = callback_query.matches[0].group(1)
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired. Please run /deploy again.")
+        return
+
+    session["instance_type"] = plan_choice
+    session["step"] = "AWAIT_SERVICE_NAME"
+    DEPLOY_SESSIONS[user_id] = session
+
+    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
+
+    await callback_query.message.edit_text(
+        f"<b>Instance Plan Selected:</b> {plan_choice.upper()}\n\n"
+        f"Please enter a unique Service Name, or click Skip to use default (<code>{default_name}</code>):",
         reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Skip (Default: {default_name})", callback_data="skip_service_name")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
         ])
     )
+
+@Client.on_callback_query(filters.regex("^skip_service_name$") & auth_filter)
+async def skip_service_name_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired. Please run /deploy again.")
+        return
+
+    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
+    session["name"] = default_name
+
+    if session.get("is_docker"):
+        session["step"] = "AWAIT_ENV_VARS"
+        await callback_query.message.edit_text(
+            f"✅ Service Name: <code>{default_name}</code>\n\n"
+            "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
+            "Or click 'Skip Env Vars' to proceed.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")]
+            ])
+        )
+    else:
+        session["step"] = "AWAIT_BUILD_COMMAND"
+        await callback_query.message.edit_text(
+            f"✅ Service Name: <code>{default_name}</code>\n\n"
+            "Please enter the Build Command:\n"
+            "<i>Example: pip install -r requirements.txt</i>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip / None", callback_data="skip_build_cmd")]
+            ])
+        )
 
 @Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
 async def wizard_text_input_handler(client: Client, message: Message):
@@ -152,12 +214,13 @@ async def wizard_text_input_handler(client: Client, message: Message):
             await msg.edit_text("📦 <b>Available Repositories:</b>\nSelect a repository to deploy:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif step == "AWAIT_SERVICE_NAME":
-        session["name"] = text
+        sanitized_name = sanitize_service_name(text, fallback=session.get("repo_name", "my-app"))
+        session["name"] = sanitized_name
 
         if session.get("is_docker"):
             session["step"] = "AWAIT_ENV_VARS"
             await message.reply_text(
-                f"✅ Service Name: <code>{text}</code>\n\n"
+                f"✅ Service Name: <code>{sanitized_name}</code>\n\n"
                 "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
                 "Or click 'Skip Env Vars' to proceed.",
                 reply_markup=InlineKeyboardMarkup([
@@ -167,6 +230,7 @@ async def wizard_text_input_handler(client: Client, message: Message):
         else:
             session["step"] = "AWAIT_BUILD_COMMAND"
             await message.reply_text(
+                f"✅ Service Name: <code>{sanitized_name}</code>\n\n"
                 "Please enter the Build Command:\n"
                 "<i>Example: pip install -r requirements.txt</i>",
                 reply_markup=InlineKeyboardMarkup([
@@ -258,18 +322,20 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
         DEPLOY_SESSIONS[user_id] = session
 
     if not branches:
-        text = (
-            f"❌ <b>No branches found or failed to fetch branches for {owner}/{repo_name}.</b>\n\n"
-            f"Please ensure the repository exists and your GitHub token in /settings has permission to access it."
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
-        ])
+        session["branch"] = "main"
+        await proceed_after_branch(client, chat_id, user_id, session)
+        return
+
+    if len(branches) == 1:
+        selected_b = branches[0]
+        session["branch"] = selected_b
+        DEPLOY_SESSIONS[user_id] = session
+        text = f"✅ <b>Auto-selected Branch:</b> <code>{selected_b}</code>"
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=kb)
+            await message_to_edit.edit_text(text)
         else:
-            await client.send_message(chat_id, text, reply_markup=kb)
+            await client.send_message(chat_id, text)
+        await proceed_after_branch(client, chat_id, user_id, session)
         return
 
     PAGE_SIZE = 8

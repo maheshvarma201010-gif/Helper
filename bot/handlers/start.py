@@ -33,6 +33,7 @@ HELP_TEXT = (
     "• /stop - Suspend a service\n"
     "• /delete - Safely delete a service\n"
     "• /env - View and manage environment variables\n"
+    "• /env_converter - Convert config files (config.py, .json, credentials) to .env\n"
     "• /settings - Configure Render API token and GitHub PAT\n"
     "• /help - Show this help menu"
 )

@@ -1,6 +1,7 @@
 import aiohttp
 import logging
 from typing import Dict, Any, List, Optional
+from bot.utils.formatter import sanitize_service_name
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,12 @@ class RenderAPI:
             if config.get("startCommand"):
                 service_details["startCommand"] = config.get("startCommand")
 
+        raw_name = config.get("name") or config.get("repo_name") or "my-service"
+        srv_name = sanitize_service_name(raw_name, fallback=config.get("repo_name") or "my-service")
+
         payload = {
             "type": srv_type,
-            "name": config["name"],
+            "name": srv_name,
             "ownerId": owner_id,
             "repo": config["repo"],
             "autoDeploy": config.get("autoDeploy", "yes"),
