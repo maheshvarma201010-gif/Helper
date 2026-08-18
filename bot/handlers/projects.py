@@ -154,7 +154,10 @@ async def display_projects_list(client: Client, chat_id: int, user_id: int, mess
                 srv_id = srv.get("id")
                 srv_name = srv.get("name")
                 buttons.append([InlineKeyboardButton(f"📦 {srv_name}", callback_data=f"view_service_{srv_id}")])
-            buttons.append([InlineKeyboardButton("🚀 Deploy New", callback_data="start_deploy")])
+            buttons.append([
+                InlineKeyboardButton("🚀 Deploy New", callback_data="start_deploy"),
+                InlineKeyboardButton("🚀 Redeploy All", callback_data="redeploy_all_services")
+            ])
             buttons.append([InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")])
             kb = InlineKeyboardMarkup(buttons)
 
@@ -321,6 +324,70 @@ async def project_edit_input_handler(client: Client, message: Message):
 
     except RenderAPIError as e:
         await message.reply_text(f"❌ Failed to update service: {e.message}")
+
+@Client.on_message(filters.command("redeploy_all") & auth_filter)
+async def redeploy_all_command(client: Client, message: Message):
+    await handle_redeploy_all(client, message.chat.id, message.from_user.id)
+
+@Client.on_callback_query(filters.regex("^redeploy_all_services$") & auth_filter)
+async def redeploy_all_callback(client: Client, callback_query: CallbackQuery):
+    await handle_redeploy_all(client, callback_query.message.chat.id, callback_query.from_user.id, callback_query.message)
+
+async def handle_redeploy_all(client: Client, chat_id: int, user_id: int, message_to_edit: Message = None):
+    api_key = await db.get_user_render_key(user_id)
+    if not api_key:
+        text = "🔑 Please configure your Render API Key in /settings first."
+        if message_to_edit:
+            await message_to_edit.edit_text(text)
+        else:
+            await client.send_message(chat_id, text)
+        return
+
+    render = RenderAPI(api_key)
+    try:
+        services = await render.list_services()
+        if not services:
+            text = "📂 No services found on your Render account."
+            if message_to_edit:
+                await message_to_edit.edit_text(text)
+            else:
+                await client.send_message(chat_id, text)
+            return
+
+        msg_text = f"⏳ <b>Triggering redeployment for all {len(services)} services...</b>"
+        if message_to_edit:
+            msg = await message_to_edit.edit_text(msg_text)
+        else:
+            msg = await client.send_message(chat_id, msg_text)
+
+        redeployed_names = []
+        for item in services:
+            srv = item.get("service", item)
+            srv_id = srv.get("id")
+            srv_name = srv.get("name", "Service")
+            try:
+                await render.redeploy_service(srv_id)
+                redeployed_names.append(srv_name)
+            except Exception as e:
+                logger.warning(f"Failed to redeploy {srv_name} ({srv_id}): {e}")
+
+        summary = [
+            f"🚀 <b>Redeploy All Completed!</b>\n",
+            f"Triggered fresh deployment for <b>{len(redeployed_names)}/{len(services)}</b> service(s):\n"
+        ]
+        for name in redeployed_names:
+            summary.append(f"• <code>{name}</code>")
+
+        await msg.edit_text(
+            "\n".join(summary),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 View Projects", callback_data="list_projects")]])
+        )
+    except RenderAPIError as e:
+        err = f"❌ Error: {e.message}"
+        if message_to_edit:
+            await message_to_edit.edit_text(err)
+        else:
+            await client.send_message(chat_id, err)
 
 @Client.on_callback_query(filters.regex("^redeploy_(.+)$") & auth_filter)
 async def redeploy_callback(client: Client, callback_query: CallbackQuery):

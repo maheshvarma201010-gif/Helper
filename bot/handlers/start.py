@@ -30,6 +30,7 @@ HELP_TEXT = (
     "• /logs - View recent build/runtime logs\n"
     "• /restart - Restart a service\n"
     "• /redeploy - Trigger a new deployment\n"
+    "• /redeploy_all - Trigger fresh deployment for all services\n"
     "• /stop - Suspend a service\n"
     "• /delete - Safely delete a service\n"
     "• /env - View and manage environment variables\n"

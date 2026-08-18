@@ -170,8 +170,16 @@ async def env_input_handler(client: Client, message: Message):
             await db.log_action(user_id, "UPDATE_ENV_VARS", {"service_id": srv_id, "action": action})
             ENV_SESSIONS.pop(user_id, None)
 
+            # Auto-redeploy service after env vars update
+            redeploy_msg = ""
+            try:
+                await render.redeploy_service(srv_id)
+                redeploy_msg = "\n🚀 <b>Automatic redeployment triggered!</b>"
+            except Exception as e_red:
+                logger.warning(f"Failed auto-redeploy after env update for {srv_id}: {e_red}")
+
             await message.reply_text(
-                "✅ <b>Environment variables updated successfully!</b>",
+                f"✅ <b>Environment variables updated successfully!</b>{redeploy_msg}",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Back to Env Vars", callback_data=f"env_service_{srv_id}")]])
             )
 
@@ -183,8 +191,16 @@ async def env_input_handler(client: Client, message: Message):
                 await db.log_action(user_id, "DELETE_ENV_VAR", {"service_id": srv_id, "key": key_to_del})
                 ENV_SESSIONS.pop(user_id, None)
 
+                # Auto-redeploy service after env var deletion
+                redeploy_msg = ""
+                try:
+                    await render.redeploy_service(srv_id)
+                    redeploy_msg = "\n🚀 <b>Automatic redeployment triggered!</b>"
+                except Exception as e_red:
+                    logger.warning(f"Failed auto-redeploy after env delete for {srv_id}: {e_red}")
+
                 await message.reply_text(
-                    f"✅ <b>Deleted <code>{key_to_del}</code> successfully!</b>",
+                    f"✅ <b>Deleted <code>{key_to_del}</code> successfully!</b>{redeploy_msg}",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Back to Env Vars", callback_data=f"env_service_{srv_id}")]])
                 )
             else:

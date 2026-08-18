@@ -41,6 +41,7 @@ class RenderDeployerBot(Client):
             BotCommand("logs", "Fetch recent deployment logs"),
             BotCommand("restart", "Restart a service"),
             BotCommand("redeploy", "Trigger a new deployment"),
+            BotCommand("redeploy_all", "Trigger fresh deployment for all services"),
             BotCommand("stop", "Suspend a service"),
             BotCommand("delete", "Delete a service"),
             BotCommand("env", "View and manage environment variables"),
