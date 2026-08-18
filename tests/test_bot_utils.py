@@ -72,6 +72,6 @@ def test_status_badges():
     assert get_status_badge("suspended") == "⚪ STOPPED"
 
 @pytest.mark.asyncio
-async def test_docker_inspector_branches_fallback():
+async def test_docker_inspector_branches_empty_on_failure():
     branches = await DockerInspector.fetch_repo_branches("nonexistent_user_12345", "nonexistent_repo_67890")
-    assert "main" in branches or "master" in branches
+    assert branches == []

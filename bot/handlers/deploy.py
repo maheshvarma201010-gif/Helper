@@ -246,7 +246,7 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
     gh_token = await db.get_user_github_token(user_id)
 
     branches = session.get("fetched_branches")
-    if not branches:
+    if branches is None:
         if message_to_edit:
             await message_to_edit.edit_text(f"🌿 Fetching all branches for <code>{owner}/{repo_name}</code>...")
         else:
@@ -256,6 +256,21 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
         branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
         session["fetched_branches"] = branches
         DEPLOY_SESSIONS[user_id] = session
+
+    if not branches:
+        text = (
+            f"❌ <b>No branches found or failed to fetch branches for {owner}/{repo_name}.</b>\n\n"
+            f"Please ensure the repository exists and your GitHub token in /settings has permission to access it."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+        ])
+        if message_to_edit:
+            await message_to_edit.edit_text(text, reply_markup=kb)
+        else:
+            await client.send_message(chat_id, text, reply_markup=kb)
+        return
 
     PAGE_SIZE = 8
     total_branches = len(branches)
