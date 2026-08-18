@@ -6,10 +6,34 @@ from bot.utils.security import auth_filter, mask_secret
 from bot.utils.github_check import check_user_github_connection, GITHUB_AUTH_URL
 from bot.utils.render_api import RenderAPI, RenderAPIError
 from bot.utils.docker_inspector import DockerInspector
+from bot.utils.migration import execute_account_migration
 
 logger = logging.getLogger(__name__)
 
 SETTINGS_SESSIONS = {}
+MIGRATION_SESSIONS = {}
+
+def build_migration_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    session = MIGRATION_SESSIONS.get(user_id, {})
+    services = session.get("services", [])
+    selected = session.get("selected", set())
+
+    buttons = []
+    for idx, item in enumerate(services):
+        srv = item.get("service", item)
+        srv_id = srv.get("id")
+        srv_name = srv.get("name", "Service")
+        checkbox = "☑️" if srv_id in selected else "🔲"
+        buttons.append([InlineKeyboardButton(f"{checkbox} {srv_name}", callback_data=f"mig_toggle_{idx}")])
+
+    select_all_label = "❌ Deselect All" if len(selected) == len(services) else "✅ Select All"
+    buttons.append([
+        InlineKeyboardButton(select_all_label, callback_data="mig_toggle_all"),
+        InlineKeyboardButton("🚀 Done (Start Migration)", callback_data="mig_start")
+    ])
+    buttons.append([InlineKeyboardButton("❌ Skip Migration", callback_data="mig_skip")])
+
+    return InlineKeyboardMarkup(buttons)
 
 @Client.on_message(filters.command("settings") & auth_filter)
 async def settings_command(client: Client, message: Message):
@@ -86,31 +110,42 @@ async def auto_token_detector(client: Client, message: Message):
 
     # Check for Render API Key (rnd_...)
     if "rnd_" in text_input:
-        key = [part for part in text_input.split() if part.startswith("rnd_")][0]
+        new_key = [part for part in text_input.split() if part.startswith("rnd_")][0]
         try:
-            render = RenderAPI(key)
+            render = RenderAPI(new_key)
             owner_id = await render.get_owner_id()
             if owner_id:
-                await db.set_user_render_key(user_id, key)
-                await db.log_action(user_id, "AUTO_SAVE_RENDER_API_KEY", {})
-                SETTINGS_SESSIONS.pop(user_id, None)
+                old_key = await db.get_user_render_key(user_id)
+                old_services = []
 
-                old_deploys = await db.get_user_deployments(user_id)
-                if old_deploys:
-                    count = len(old_deploys)
-                    kb = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
-                        [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
-                    ])
+                if old_key and old_key != new_key:
+                    try:
+                        old_render = RenderAPI(old_key)
+                        old_services = await old_render.list_services()
+                    except Exception as e_old:
+                        logger.warning(f"Failed to fetch services from old account: {e_old}")
+
+                if old_services:
+                    MIGRATION_SESSIONS[user_id] = {
+                        "old_key": old_key,
+                        "new_key": new_key,
+                        "services": old_services,
+                        "selected": set()
+                    }
+                    SETTINGS_SESSIONS.pop(user_id, None)
                     await message.reply_text(
-                        f"✅ <b>Render API Key detected, verified & saved!</b>\n\n"
-                        f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
-                        f"Would you like to re-deploy all these old repos to your new Render account?",
-                        reply_markup=kb
+                        "🔄 <b>New Render API Key Detected!</b>\n\n"
+                        f"Found {len(old_services)} active service(s) on your old Render account.\n"
+                        "Select the service(s) you want to migrate to your new Render account:\n"
+                        "<i>Note: Old services will be suspended only after all selected services are deployed on the new account.</i>",
+                        reply_markup=build_migration_keyboard(user_id)
                     )
                 else:
+                    await db.set_user_render_key(user_id, new_key)
+                    await db.log_action(user_id, "AUTO_SAVE_RENDER_API_KEY", {})
+                    SETTINGS_SESSIONS.pop(user_id, None)
                     await message.reply_text(
-                        f"✅ <b>Render API Key detected, verified & saved!</b>\nKey: <code>{mask_secret(key)}</code>",
+                        f"✅ <b>Render API Key detected, verified & saved!</b>\nKey: <code>{mask_secret(new_key)}</code>",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
                     )
                 return
@@ -147,30 +182,42 @@ async def settings_key_input_handler(client: Client, message: Message):
 
     if state == "AWAIT_KEY":
         try:
-            render = RenderAPI(text_input)
+            new_key = text_input
+            render = RenderAPI(new_key)
             owner_id = await render.get_owner_id()
             if not owner_id:
                 await message.reply_text("❌ Could not authenticate with Render. Please check your API key.")
                 return
 
-            await db.set_user_render_key(user_id, text_input)
-            await db.log_action(user_id, "UPDATE_RENDER_API_KEY", {})
-            SETTINGS_SESSIONS.pop(user_id, None)
+            old_key = await db.get_user_render_key(user_id)
+            old_services = []
 
-            old_deploys = await db.get_user_deployments(user_id)
-            if old_deploys:
-                count = len(old_deploys)
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Resync & Deploy All Old Repos", callback_data="resync_old_repos")],
-                    [InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]
-                ])
+            if old_key and old_key != new_key:
+                try:
+                    old_render = RenderAPI(old_key)
+                    old_services = await old_render.list_services()
+                except Exception as e_old:
+                    logger.warning(f"Failed to fetch services from old account: {e_old}")
+
+            if old_services:
+                MIGRATION_SESSIONS[user_id] = {
+                    "old_key": old_key,
+                    "new_key": new_key,
+                    "services": old_services,
+                    "selected": set()
+                }
+                SETTINGS_SESSIONS.pop(user_id, None)
                 await message.reply_text(
-                    f"✅ <b>Render API Key verified and saved!</b>\n\n"
-                    f"ℹ️ <b>Found {count} previously deployed repository(s) in your history.</b>\n"
-                    f"Would you like to re-deploy all these old repos to your new Render account?",
-                    reply_markup=kb
+                    "🔄 <b>New Render API Key Verified!</b>\n\n"
+                    f"Found {len(old_services)} active service(s) on your old Render account.\n"
+                    "Select the service(s) you want to migrate to your new Render account:\n"
+                    "<i>Note: Old services will be suspended only after all selected services are deployed on the new account.</i>",
+                    reply_markup=build_migration_keyboard(user_id)
                 )
             else:
+                await db.set_user_render_key(user_id, new_key)
+                await db.log_action(user_id, "UPDATE_RENDER_API_KEY", {})
+                SETTINGS_SESSIONS.pop(user_id, None)
                 await message.reply_text(
                     "✅ <b>Render API Key saved and verified successfully!</b>",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Open Settings", callback_data="open_settings")]])
@@ -196,49 +243,107 @@ async def settings_key_input_handler(client: Client, message: Message):
         else:
             await message.reply_text("❌ Could not authenticate GitHub Token. Please check token permissions.")
 
-@Client.on_callback_query(filters.regex("^resync_old_repos$") & auth_filter)
-async def resync_old_repos_callback(client: Client, callback_query: CallbackQuery):
+@Client.on_callback_query(filters.regex("^mig_toggle_(\\d+)$") & auth_filter)
+async def mig_toggle_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    api_key = await db.get_user_render_key(user_id)
-    render = RenderAPI(api_key)
-
-    old_deploys = await db.get_user_deployments(user_id)
-    if not old_deploys:
-        await callback_query.answer("No old deployments found.", show_alert=True)
+    idx = int(callback_query.matches[0].group(1))
+    session = MIGRATION_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.answer("Migration session expired.", show_alert=True)
         return
 
-    msg = await callback_query.message.edit_text("⏳ <b>Resynced API key. Deploying old repositories to new Render account...</b>")
-    deployed_count = 0
+    services = session.get("services", [])
+    if 0 <= idx < len(services):
+        srv = services[idx].get("service", services[idx])
+        srv_id = srv.get("id")
+        selected = session["selected"]
+        if srv_id in selected:
+            selected.remove(srv_id)
+        else:
+            selected.add(srv_id)
 
-    for record in old_deploys:
-        try:
-            config = {
-                "name": record.get("service_name"),
-                "repo": record.get("repo_url"),
-                "branch": record.get("branch", "main"),
-                "type": record.get("service_type", "web_service"),
-                "is_docker": record.get("is_docker", False),
-                "dockerfilePath": "./Dockerfile",
-                "dockerContext": "."
-            }
-            res = await render.create_service(config)
-            srv = res.get("service", res)
-            srv_id = srv.get("id")
-            await db.save_deployment(
-                user_id=user_id,
-                service_id=srv_id,
-                service_name=record.get("service_name"),
-                repo_url=record.get("repo_url"),
-                branch=record.get("branch", "main"),
-                service_type=record.get("service_type", "web_service"),
-                is_docker=record.get("is_docker", False),
-                status="created"
-            )
-            deployed_count += 1
-        except Exception as e:
-            logger.warning(f"Resync deployment error for {record.get('service_name')}: {e}")
+    await callback_query.message.edit_reply_markup(reply_markup=build_migration_keyboard(user_id))
+
+@Client.on_callback_query(filters.regex("^mig_toggle_all$") & auth_filter)
+async def mig_toggle_all_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = MIGRATION_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.answer("Migration session expired.", show_alert=True)
+        return
+
+    services = session.get("services", [])
+    selected = session["selected"]
+
+    all_ids = {s.get("service", s).get("id") for s in services}
+    if len(selected) == len(all_ids):
+        session["selected"] = set()
+    else:
+        session["selected"] = set(all_ids)
+
+    await callback_query.message.edit_reply_markup(reply_markup=build_migration_keyboard(user_id))
+
+@Client.on_callback_query(filters.regex("^mig_skip$") & auth_filter)
+async def mig_skip_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = MIGRATION_SESSIONS.pop(user_id, None)
+    if session and "new_key" in session:
+        await db.set_user_render_key(user_id, session["new_key"])
+
+    await callback_query.message.edit_text(
+        "✅ <b>New Render API Key Saved!</b>\nMigration skipped.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")]])
+    )
+
+@Client.on_callback_query(filters.regex("^mig_start$") & auth_filter)
+async def mig_start_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = MIGRATION_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.answer("Migration session expired.", show_alert=True)
+        return
+
+    selected_ids = session.get("selected", set())
+    if not selected_ids:
+        await callback_query.answer("Please select at least one service to migrate.", show_alert=True)
+        return
+
+    old_key = session["old_key"]
+    new_key = session["new_key"]
+    all_services = session["services"]
+
+    selected_services = [s for s in all_services if s.get("service", s).get("id") in selected_ids]
+
+    msg = await callback_query.message.edit_text("⏳ <b>Starting migration... Creating services on new Render account...</b>")
+
+    res = await execute_account_migration(old_key, new_key, user_id, selected_services)
+    MIGRATION_SESSIONS.pop(user_id, None)
+
+    deployed = res.get("deployed", [])
+    suspended_count = res.get("suspended_count", 0)
+
+    dm_lines = [
+        "🎉 <b>Render Service Account Migration Completed!</b>\n",
+        f"<b>Deployed on New Account:</b> {len(deployed)} service(s)",
+        f"<b>Suspended on Old Account:</b> {suspended_count} service(s)\n",
+        "<b>Newly Generated Service URLs:</b>"
+    ]
+
+    for item in deployed:
+        dm_lines.append(f"• <b>{item['name']}:</b> {item['url']}")
+
+    dm_text = "\n".join(dm_lines)
 
     await msg.edit_text(
-        f"✅ <b>Resync Complete!</b>\n\nSuccessfully deployed {deployed_count} old repositories to your new Render account.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 View Projects", callback_data="list_projects")]])
+        dm_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📂 View Projects", callback_data="list_projects")],
+            [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")]
+        ])
     )
+
+    # Also send to user's DM
+    try:
+        await client.send_message(user_id, dm_text)
+    except Exception as e:
+        logger.warning(f"Could not send migration DM to user {user_id}: {e}")
