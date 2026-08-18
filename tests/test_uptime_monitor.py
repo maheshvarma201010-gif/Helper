@@ -7,6 +7,7 @@ from bot.database.mongo import Database
 @pytest.mark.asyncio
 async def test_uptime_check_service_url():
     monitor = UptimeMonitor()
+    assert monitor.check_interval == 50
 
     mock_resp = AsyncMock()
     mock_resp.status = 200

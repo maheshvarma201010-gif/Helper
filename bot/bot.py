@@ -52,8 +52,8 @@ class RenderDeployerBot(Client):
             BotCommand("help", "Show command documentation")
         ])
 
-        # Start Uptime Kuma style background monitor
-        self.uptime_monitor = UptimeMonitor(bot_client=self, check_interval=60)
+        # Start Uptime Kuma style background monitor (ping every 50 seconds to keep services awake)
+        self.uptime_monitor = UptimeMonitor(bot_client=self, check_interval=50)
         self.uptime_monitor.start()
 
         # Start Free Tier / Bandwidth Expiry Hourly Notifier

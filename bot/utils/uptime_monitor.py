@@ -8,7 +8,7 @@ from bot.database.mongo import db
 logger = logging.getLogger(__name__)
 
 class UptimeMonitor:
-    def __init__(self, bot_client=None, check_interval: int = 60):
+    def __init__(self, bot_client=None, check_interval: int = 50):
         self.bot_client = bot_client
         self.check_interval = check_interval
         self._running = False
