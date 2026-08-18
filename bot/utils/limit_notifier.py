@@ -60,8 +60,8 @@ class FreeTierLimitNotifier:
 
                 if has_free_services:
                     msg_text = (
-                        "⚠️ <b>Render Free Tier / Bandwidth Expiry Reminder</b>\n\n"
-                        "Your Render free tier instance hours or monthly bandwidth limits may be expiring soon or reached.\n\n"
+                        "⚠️ <b>Render Free Tier Usage Alert (600 Hours / 4 GB Bandwidth)</b>\n\n"
+                        "Your Render free tier usage is nearing <b>600 instance hours</b> or monthly bandwidth is approaching <b>4 GB</b>.\n\n"
                         "💡 <b>Action Required:</b> Please update your Render API Key in /settings with a new Render account "
                         "to migrate and keep all your services running 24/7 without interruption!"
                     )

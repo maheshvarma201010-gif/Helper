@@ -22,3 +22,6 @@ async def test_free_tier_limit_notifier():
         await notifier.check_and_notify_users()
         bot_client.send_message.assert_called_once()
         assert 12345 in bot_client.send_message.call_args[0]
+        sent_msg = bot_client.send_message.call_args[0][1]
+        assert "600 Hours" in sent_msg or "600 instance hours" in sent_msg
+        assert "4 GB" in sent_msg
