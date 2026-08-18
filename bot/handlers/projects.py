@@ -281,14 +281,59 @@ async def set_branch_callback(client: Client, callback_query: CallbackQuery):
 async def change_repo_prompt(client: Client, callback_query: CallbackQuery):
     srv_id = callback_query.matches[0].group(1).strip()
     user_id = callback_query.from_user.id
-    SERVICE_EDIT_SESSIONS[user_id] = {"service_id": srv_id, "action": "SET_REPO"}
+    gh_token = await db.get_user_github_token(user_id)
 
+    if gh_token:
+        msg = await callback_query.message.edit_text("🔍 Fetching your GitHub repositories...")
+        repos = await DockerInspector.fetch_user_repos("me", github_token=gh_token)
+        if repos:
+            buttons = []
+            for r in repos[:10]:
+                r_name = r.get("name")
+                buttons.append([InlineKeyboardButton(f"📦 {r.get('full_name') or r_name}", callback_data=f"set_repo_url_{srv_id}_{r_name}")])
+            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"view_service_{srv_id}")])
+
+            await msg.edit_text(
+                "🔗 <b>Select New Repository for Service:</b>",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+            return
+
+    SERVICE_EDIT_SESSIONS[user_id] = {"service_id": srv_id, "action": "SET_REPO"}
     await callback_query.message.edit_text(
         "🔗 <b>Change Repository:</b>\n"
         "Please send the new GitHub Repository URL:\n"
         "<i>Example: https://github.com/owner/new-repo</i>",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"view_service_{srv_id}")]])
     )
+
+@Client.on_callback_query(filters.regex("^set_repo_url_([^_]+)_(.+)$") & auth_filter)
+async def set_repo_url_callback(client: Client, callback_query: CallbackQuery):
+    srv_id = callback_query.matches[0].group(1)
+    repo_name = callback_query.matches[0].group(2)
+    user_id = callback_query.from_user.id
+    api_key = await db.get_user_render_key(user_id)
+    render = RenderAPI(api_key)
+    gh_token = await db.get_user_github_token(user_id)
+
+    repos = await DockerInspector.fetch_user_repos("me", github_token=gh_token) or []
+    new_repo_url = f"https://github.com/user/{repo_name}"
+    for r in repos:
+        if r.get("name") == repo_name and r.get("html_url"):
+            new_repo_url = r["html_url"]
+            break
+
+    try:
+        await render.update_service(srv_id, {"repo": new_repo_url})
+        await render.redeploy_service(srv_id)
+        await db.log_action(user_id, "UPDATE_SERVICE_REPO", {"service_id": srv_id, "repo": new_repo_url})
+        await callback_query.answer(f"✅ Repository updated to {repo_name} & redeployment triggered!", show_alert=True)
+
+        service = await render.get_service(srv_id)
+        card_text = format_service_card(service)
+        await callback_query.message.edit_text(card_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Service", callback_data=f"view_service_{srv_id}")]]))
+    except RenderAPIError as e:
+        await callback_query.answer(f"Failed to change repo: {e.message}", show_alert=True)
 
 @Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
 async def project_edit_input_handler(client: Client, message: Message):
