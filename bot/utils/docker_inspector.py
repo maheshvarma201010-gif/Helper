@@ -41,8 +41,10 @@ class DockerInspector:
         page = 1
         async with aiohttp.ClientSession() as session:
             while page <= 10:  # Fetch up to 1000 repositories across pages
-                if github_token:
-                    api_url = f"https://api.github.com/user/repos?visibility=all&per_page=100&page={page}&sort=updated"
+                if github_token and (owner.lower() in ["me", "user", "self", ""]):
+                    api_url = f"https://api.github.com/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&per_page=100&page={page}&sort=updated"
+                elif github_token:
+                    api_url = f"https://api.github.com/users/{owner.strip()}/repos?per_page=100&page={page}&sort=updated"
                 else:
                     api_url = f"https://api.github.com/users/{owner.strip()}/repos?per_page=100&page={page}&sort=updated"
 
