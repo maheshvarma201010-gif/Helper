@@ -48,11 +48,38 @@ class RenderAPI:
             logger.warning(f"Failed to fetch owner ID: {e}")
         return None
 
-    async def list_services(self, limit: int = 20) -> List[Dict[str, Any]]:
-        data = await self._request("GET", "/services", params={"limit": limit})
-        if isinstance(data, list):
-            return data
-        return []
+    async def list_services(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lists all services owned by the user, handling pagination to fetch up to 1000+ services."""
+        all_services = []
+        cursor = None
+
+        while True:
+            params = {"limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+
+            data = await self._request("GET", "/services", params=params)
+            if not isinstance(data, list) or len(data) == 0:
+                break
+
+            all_services.extend(data)
+
+            # Check if there are more items to paginate
+            if len(data) < limit:
+                break
+
+            # Render API cursor-based pagination
+            last_item = data[-1]
+            last_srv = last_item.get("service", last_item)
+            next_cursor = last_srv.get("id")
+            if not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+            if len(all_services) >= 2000:
+                break
+
+        return all_services
 
     async def get_service(self, service_id: str) -> Dict[str, Any]:
         return await self._request("GET", f"/services/{service_id}")

@@ -152,7 +152,19 @@ async def display_projects_list(client: Client, chat_id: int, user_id: int, mess
             for item in services:
                 srv = item.get("service", item)
                 srv_id = srv.get("id")
-                srv_name = srv.get("name")
+                srv_name = srv.get("name") or "Service"
+                # Auto-sync existing Render services into local database
+                await db.save_deployment(
+                    user_id=user_id,
+                    service_id=srv_id,
+                    service_name=srv_name,
+                    repo_url=srv.get("repo", ""),
+                    branch=srv.get("branch", "main"),
+                    service_type=srv.get("type", "web_service"),
+                    is_docker=(srv.get("serviceDetails", {}).get("env") == "docker"),
+                    status=srv.get("status", "running"),
+                    service_url=srv.get("serviceDetails", {}).get("url")
+                )
                 buttons.append([InlineKeyboardButton(f"📦 {srv_name}", callback_data=f"view_service_{srv_id}")])
             buttons.append([
                 InlineKeyboardButton("🚀 Deploy New", callback_data="start_deploy"),
