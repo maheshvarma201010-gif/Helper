@@ -76,13 +76,6 @@ async def service_env_view(client: Client, callback_query: CallbackQuery):
         env_vars = await render.get_env_vars(srv_id)
         masked_vars = mask_env_vars(env_vars)
 
-        lines = [f"⚙️ <b>Environment Variables for Service:</b> <code>{srv_id}</code>\n"]
-        if not masked_vars:
-            lines.append("<i>No environment variables configured.</i>")
-        else:
-            for k, v in masked_vars.items():
-                lines.append(f"• <code>{k}</code> = <code>{v}</code>")
-
         kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("➕ Add/Edit Variable", callback_data=f"env_add_{srv_id}"),
@@ -94,7 +87,42 @@ async def service_env_view(client: Client, callback_query: CallbackQuery):
             ]
         ])
 
-        await callback_query.message.edit_text("\n".join(lines), reply_markup=kb)
+        if not masked_vars:
+            await callback_query.message.edit_text(
+                f"⚙️ <b>Environment Variables for Service:</b> <code>{srv_id}</code>\n\n"
+                "<i>No environment variables configured.</i>",
+                reply_markup=kb
+            )
+            return
+
+        formatted_lines = [f"• <code>{k}</code> = <code>{v}</code>" for k, v in masked_vars.items()]
+        header = f"⚙️ <b>Environment Variables for Service:</b> <code>{srv_id}</code> (Total: {len(masked_vars)})\n\n"
+
+        # Chunk lines so messages stay under Telegram's 4000 character limit
+        chunks = []
+        curr_lines = []
+        curr_len = len(header)
+        for line in formatted_lines:
+            if curr_len + len(line) + 1 > 3500 and curr_lines:
+                chunks.append("\n".join(curr_lines))
+                curr_lines = [line]
+                curr_len = len(line)
+            else:
+                curr_lines.append(line)
+                curr_len += len(line) + 1
+        if curr_lines:
+            chunks.append("\n".join(curr_lines))
+
+        # Edit first message with initial chunk
+        await callback_query.message.edit_text(f"{header}{chunks[0]}", reply_markup=kb if len(chunks) == 1 else None)
+
+        # Reply with remaining chunks if environment variables exceed 1 message
+        for idx in range(1, len(chunks)):
+            is_last = (idx == len(chunks) - 1)
+            await callback_query.message.reply_text(
+                f"⚙️ <b>Variables (Part {idx+1}/{len(chunks)}):</b>\n\n{chunks[idx]}",
+                reply_markup=kb if is_last else None
+            )
 
     except RenderAPIError as e:
         await callback_query.answer(f"Failed to fetch env vars: {e.message}", show_alert=True)

@@ -124,3 +124,7 @@ async def verify_github_callback(client: Client, callback_query: CallbackQuery):
             text=error_msg,
             reply_markup=keyboard
         )
+
+@Client.on_callback_query(filters.regex("^noop$"))
+async def noop_callback(client: Client, callback_query: CallbackQuery):
+    await callback_query.answer()

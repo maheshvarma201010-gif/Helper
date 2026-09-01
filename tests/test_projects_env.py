@@ -22,3 +22,24 @@ async def test_handle_redeploy_all_success():
 
         assert mock_render.redeploy_service.call_count == 2
         mock_msg.edit_text.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_render_api_list_services_pagination():
+    from bot.utils.render_api import RenderAPI
+
+    render = RenderAPI("rnd_mock_key")
+
+    page1 = [{"service": {"id": f"srv_{i}", "name": f"App {i}"}} for i in range(100)]
+    page2 = [{"service": {"id": f"srv_{i}", "name": f"App {i}"}} for i in range(100, 150)]
+
+    async def mock_request(method, endpoint, json_data=None, params=None):
+        if params and params.get("cursor") == "srv_99":
+            return page2
+        return page1
+
+    render._request = AsyncMock(side_effect=mock_request)
+
+    services = await render.list_services(limit=100)
+    assert len(services) == 150
+    assert services[0]["service"]["id"] == "srv_0"
+    assert services[149]["service"]["id"] == "srv_149"
