@@ -12,6 +12,7 @@ async def start_command(client, message):
         "• /forward - Cleanly copy a range of messages between links\n"
         "• /ss `<session>` - Save your Pyrogram String Session\n"
         "• /auto - Configure default button templates for Auto Mode\n"
+        "• /inserthy - Insert hyperlinks into caption text\n"
         "• /tedit - Setup and manage image watermarking\n"
         "• /replace - Bulk replace text/links in channel posts\n"
         "• /scrab `<link>` - Extract buttons from an existing post\n\n"

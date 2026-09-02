@@ -119,6 +119,7 @@ class Bot(Client):
             BotCommand("forward", "Cleanly copy messages between links"),
             BotCommand("ss", "Save your string session"),
             BotCommand("auto", "Configure default button templates"),
+            BotCommand("inserthy", "Insert hyperlinks into caption text"),
             BotCommand("scrab", "Extract buttons from a post link"),
             BotCommand("tedit", "Watermarking menu"),
             BotCommand("stats", "Admin statistics"),
