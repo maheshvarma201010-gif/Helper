@@ -256,7 +256,8 @@ class Database:
                 "temp_btn_wiz": "",
                 "temp_dm_links": "",
                 "temp_manual": "",
-                "temp_replace": ""
+                "temp_replace": "",
+                "temp_inserthy_caption": ""
             }}
         )
         # Also clear temporary job data if any
