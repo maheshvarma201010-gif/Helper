@@ -16,6 +16,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+bot_instance = None
+
 async def health_check(request):
     active_jobs = await db.get_all_active_tedit_jobs()
     status = {
@@ -74,11 +76,65 @@ async def web_search_handler(request):
     }
     return aiohttp_jinja2.render_template("index.html", request, context)
 
+async def ensure_local_media_file(file_data):
+    """
+    Ensures that the video file and its extracted audio tracks exist on disk.
+    If missing (e.g. after server restart or container purge), re-downloads
+    from FILE_CHANNEL or the original Telegram message on demand.
+    """
+    if not file_data:
+        return None
+
+    file_id = file_data["file_id"]
+    file_path = file_data.get("file_path")
+    file_dir = file_data.get("file_dir") or os.path.join("downloads", file_id)
+    os.makedirs(file_dir, exist_ok=True)
+
+    if not file_path:
+        file_name = file_data.get("file_name", "video.mp4")
+        file_path = os.path.join(file_dir, file_name)
+        file_data["file_path"] = file_path
+
+    # Check if file exists and has size
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        return file_data
+
+    # File missing on disk, fetch from Telegram
+    if not bot_instance:
+        logger.error("bot_instance is None, cannot re-download media on demand")
+        return file_data
+
+    target_chat = file_data.get("file_channel_id") or file_data.get("chat_id")
+    target_msg_id = file_data.get("file_channel_message_id") or file_data.get("message_id")
+
+    if not target_chat or not target_msg_id:
+        logger.error(f"No valid chat/message ID for re-downloading file_id {file_id}")
+        return file_data
+
+    try:
+        logger.info(f"On-demand fetching missing media {file_id} from chat {target_chat}, msg {target_msg_id}")
+        target_msg = await bot_instance.get_messages(target_chat, target_msg_id)
+        if target_msg and (target_msg.video or target_msg.document):
+            await bot_instance.download_media(message=target_msg, file_name=file_path)
+
+            from bot.utils.media import extract_audio_tracks
+            tracks = await extract_audio_tracks(file_path, file_dir)
+            file_data["audio_tracks"] = tracks
+            file_data["file_path"] = file_path
+            await db.add_media_file(file_data)
+            logger.info(f"Successfully re-cached missing media {file_id} on demand!")
+    except Exception as e:
+        logger.exception(f"Failed on-demand download for file_id {file_id}: {e}")
+
+    return file_data
+
 async def watch_handler(request):
     file_id = request.match_info.get('file_id')
     file_data = await db.get_media_file(file_id)
     if not file_data:
         return web.Response(text="404 File Not Found", status=404)
+
+    file_data = await ensure_local_media_file(file_data)
 
     recent = await db.get_recent_posts(hours=24)
     context = {
@@ -93,6 +149,7 @@ async def download_handler(request):
     if not file_data:
         return web.Response(text="404 File Not Found", status=404)
 
+    file_data = await ensure_local_media_file(file_data)
     file_path = file_data.get("file_path")
     if not file_path or not os.path.exists(file_path):
         return web.Response(text="404 File Not Available on Server", status=404)
@@ -130,6 +187,7 @@ async def audio_track_handler(request):
     if not file_data:
         return web.Response(text="404 File Not Found", status=404)
 
+    file_data = await ensure_local_media_file(file_data)
     audio_tracks = file_data.get("audio_tracks", [])
     target_track = None
     for track in audio_tracks:
@@ -199,9 +257,22 @@ class Bot(Client):
         )
 
     async def start(self):
+        global bot_instance
+        bot_instance = self
         await super().start()
         me = await self.get_me()
         logger.info(f"Bot started as @{me.username}")
+
+        # Send test message to FILE_CHANNEL to verify credentials & access
+        if Config.FILE_CHANNEL:
+            try:
+                await self.send_message(
+                    Config.FILE_CHANNEL,
+                    "🤖 **File Channel Connected!**\nFile storage & streaming system is active."
+                )
+                logger.info(f"Verified FILE_CHANNEL ({Config.FILE_CHANNEL}) successfully.")
+            except Exception as e:
+                logger.warning(f"Could not send test message to FILE_CHANNEL ({Config.FILE_CHANNEL}): {e}")
 
         from pyrogram.types import BotCommand
         await self.set_bot_commands([

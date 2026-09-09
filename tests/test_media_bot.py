@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from bot.config import Config
 from bot.utils.media import format_audio_tracks_summary, probe_audio_tracks, extract_audio_tracks, _probe_with_ffmpeg
 from bot.database.mongo import db
+from bot.bot import ensure_local_media_file
 
 def test_config_file_channel():
     assert hasattr(Config, "FILE_CHANNEL")
@@ -51,6 +52,38 @@ def test_probe_with_ffmpeg_fallback():
             assert tracks[0]["language"] == "eng"
             assert tracks[1]["title"] == "Hindi Track"
             assert tracks[1]["language"] == "hin"
+
+    asyncio.run(_test())
+
+def test_ensure_local_media_file_ondemand():
+    async def _test():
+        mock_msg = AsyncMock()
+        mock_msg.video = MagicMock()
+        mock_msg.document = None
+
+        mock_bot = AsyncMock()
+        mock_bot.get_messages.return_value = mock_msg
+
+        async def fake_download(message, file_name):
+            with open(file_name, "w") as f:
+                f.write("dummy content")
+
+        mock_bot.download_media = fake_download
+
+        file_data = {
+            "file_id": "test-ondemand-99",
+            "file_name": "sample.mp4",
+            "file_path": "/tmp/test_ondemand_dir/sample.mp4",
+            "file_dir": "/tmp/test_ondemand_dir",
+            "file_channel_id": -10012345,
+            "file_channel_message_id": 42
+        }
+
+        with patch("bot.bot.bot_instance", mock_bot), \
+             patch("bot.utils.media.extract_audio_tracks", AsyncMock(return_value=[])):
+            res = await ensure_local_media_file(file_data)
+            assert res is not None
+            assert os.path.exists("/tmp/test_ondemand_dir/sample.mp4")
 
     asyncio.run(_test())
 

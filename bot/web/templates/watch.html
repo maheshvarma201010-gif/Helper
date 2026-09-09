@@ -43,7 +43,7 @@
 <div class="row justify-content-center">
     <div class="col-lg-10">
         <div class="video-container mb-4">
-            <video id="videoPlayer" controls preload="metadata" crossorigin="anonymous">
+            <video id="videoPlayer" controls preload="auto" crossorigin="anonymous">
                 <source src="/download/{{ file.file_id }}" type="{{ file.mime_type or 'video/mp4' }}">
                 Your browser does not support HTML5 video streaming.
             </video>
