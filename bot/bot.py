@@ -74,6 +74,70 @@ async def web_search_handler(request):
     }
     return aiohttp_jinja2.render_template("index.html", request, context)
 
+async def watch_handler(request):
+    file_id = request.match_info.get('file_id')
+    file_data = await db.get_media_file(file_id)
+    if not file_data:
+        return web.Response(text="404 File Not Found", status=404)
+
+    recent = await db.get_recent_posts(hours=24)
+    context = {
+        "file": file_data,
+        "recent_posts": recent
+    }
+    return aiohttp_jinja2.render_template("watch.html", request, context)
+
+async def download_handler(request):
+    file_id = request.match_info.get('file_id')
+    file_data = await db.get_media_file(file_id)
+    if not file_data:
+        return web.Response(text="404 File Not Found", status=404)
+
+    file_path = file_data.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        return web.Response(text="404 File Not Available on Server", status=404)
+
+    filename = file_data.get("file_name", "download.mp4")
+    return web.FileResponse(
+        path=file_path,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+async def audio_track_handler(request):
+    file_id = request.match_info.get('file_id')
+    try:
+        track_index = int(request.match_info.get('track_index', 0))
+    except ValueError:
+        return web.Response(text="Invalid track index", status=400)
+
+    file_data = await db.get_media_file(file_id)
+    if not file_data:
+        return web.Response(text="404 File Not Found", status=404)
+
+    audio_tracks = file_data.get("audio_tracks", [])
+    target_track = None
+    for track in audio_tracks:
+        if track.get("audio_index") == track_index:
+            target_track = track
+            break
+
+    if not target_track:
+        return web.Response(text="404 Audio Track Not Found", status=404)
+
+    audio_path = target_track.get("file_path")
+    if not audio_path or not os.path.exists(audio_path):
+        return web.Response(text="404 Audio Track File Not Found", status=404)
+
+    audio_filename = target_track.get("file_name", f"audio_track_{track_index}.aac")
+    return web.FileResponse(
+        path=audio_path,
+        headers={
+            "Content-Disposition": f'inline; filename="{audio_filename}"'
+        }
+    )
+
 async def redirect_handler(request):
     url = request.query.get('url')
     if not url:
@@ -116,6 +180,7 @@ class Bot(Client):
         from pyrogram.types import BotCommand
         await self.set_bot_commands([
             BotCommand("start", "Start the bot"),
+            BotCommand("link", "Generate Watch & Download links for a video"),
             BotCommand("forward", "Cleanly copy messages between links"),
             BotCommand("ss", "Save your string session"),
             BotCommand("auto", "Configure default button templates"),
@@ -144,6 +209,9 @@ class Bot(Client):
         app.router.add_get("/web-search", web_search_handler)
         app.router.add_get("/health", health_check)
         app.router.add_get("/go", redirect_handler)
+        app.router.add_get("/watch/{file_id}", watch_handler)
+        app.router.add_get("/download/{file_id}", download_handler)
+        app.router.add_get("/audio/{file_id}/{track_index}", audio_track_handler)
         app.router.add_static("/static", static_path)
 
         runner = web.AppRunner(app)

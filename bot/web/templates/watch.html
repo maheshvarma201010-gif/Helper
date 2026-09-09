@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Watch - {{ file.file_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .video-container {
+        position: relative;
+        width: 100%;
+        max-width: 960px;
+        margin: 0 auto;
+        background: #000;
+        border-radius: 8px;
+        box-shadow: 0 0 25px rgba(0, 242, 255, 0.25);
+        overflow: hidden;
+    }
+
+    video {
+        width: 100%;
+        max-height: 540px;
+        display: block;
+    }
+
+    .controls-card {
+        background: rgba(17, 17, 17, 0.95);
+        border: 1px solid rgba(0, 242, 255, 0.3);
+        border-radius: 8px;
+        padding: 20px;
+        margin-top: 20px;
+    }
+
+    .track-badge {
+        background: var(--secondary-color);
+        color: #fff;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="video-container mb-4">
+            <video id="videoPlayer" controls preload="metadata" crossorigin="anonymous">
+                <source src="/download/{{ file.file_id }}" type="{{ file.mime_type or 'video/mp4' }}">
+                Your browser does not support HTML5 video streaming.
+            </video>
+            <!-- Sync audio element for track switching -->
+            <audio id="externalAudio" crossorigin="anonymous" style="display: none;"></audio>
+        </div>
+
+        <div class="controls-card text-white">
+            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                <h4 class="mb-0 text-truncate neon-text" style="max-width: 70%;" title="{{ file.file_name }}">
+                    <i class="fas fa-film me-2"></i>{{ file.file_name }}
+                </h4>
+                <a href="/download/{{ file.file_id }}" class="btn btn-cyber">
+                    <i class="fas fa-download me-1"></i> Download File
+                </a>
+            </div>
+
+            <hr class="border-secondary mb-4">
+
+            <div class="row align-items-center">
+                <div class="col-md-6 mb-3 mb-md-0">
+                    <label for="audioTrackSelect" class="form-label fw-bold">
+                        <i class="fas fa-music me-1 text-info"></i> Audio Track Selector
+                    </label>
+                    <select id="audioTrackSelect" class="form-select bg-dark text-white border-info">
+                        <option value="-1">Default Embedded Audio</option>
+                        {% for track in file.audio_tracks %}
+                        <option value="{{ track.audio_index }}" data-src="/audio/{{ file.file_id }}/{{ track.audio_index }}">
+                            Track {{ loop.index }}: {{ track.title }} [{{ track.language|upper }} - {{ track.codec|upper }}]
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <span class="text-muted small">
+                        <i class="fas fa-info-circle me-1"></i> Active Track Status:
+                    </span>
+                    <div id="trackStatus" class="mt-1 fw-bold text-info">
+                        Embedded Video Audio
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Load FFmpeg.wasm for client-side audio processing where supported -->
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const video = document.getElementById("videoPlayer");
+        const audio = document.getElementById("externalAudio");
+        const trackSelect = document.getElementById("audioTrackSelect");
+        const trackStatus = document.getElementById("trackStatus");
+
+        let isExternalAudio = false;
+
+        // Initialize FFmpeg.wasm if available
+        let ffmpeg = null;
+        if (window.FFmpegWasm) {
+            try {
+                const { FFmpeg } = window.FFmpegWasm;
+                ffmpeg = new FFmpeg();
+                logger.info("FFmpeg.wasm initialized");
+            } catch (e) {
+                console.warn("FFmpeg.wasm load warning:", e);
+            }
+        }
+
+        trackSelect.addEventListener("change", function () {
+            const selectedVal = parseInt(trackSelect.value);
+            const selectedOption = trackSelect.options[trackSelect.selectedIndex];
+
+            if (selectedVal === -1) {
+                // Switch back to embedded audio
+                audio.pause();
+                audio.src = "";
+                video.muted = false;
+                isExternalAudio = false;
+                trackStatus.textContent = "Embedded Video Audio";
+            } else {
+                const audioSrc = selectedOption.getAttribute("data-src");
+                video.muted = true; // Mute video native audio
+                audio.src = audioSrc;
+                audio.currentTime = video.currentTime;
+
+                if (!video.paused) {
+                    audio.play().catch(e => console.error("Audio playback error:", e));
+                }
+
+                isExternalAudio = true;
+                trackStatus.textContent = selectedOption.text;
+            }
+        });
+
+        // Sync Video and Audio events
+        video.addEventListener("play", function () {
+            if (isExternalAudio) {
+                audio.currentTime = video.currentTime;
+                audio.play().catch(e => console.error(e));
+            }
+        });
+
+        video.addEventListener("pause", function () {
+            if (isExternalAudio) {
+                audio.pause();
+            }
+        });
+
+        video.addEventListener("seeking", function () {
+            if (isExternalAudio) {
+                audio.currentTime = video.currentTime;
+            }
+        });
+
+        video.addEventListener("ratechange", function () {
+            if (isExternalAudio) {
+                audio.playbackRate = video.playbackRate;
+            }
+        });
+    });
+</script>
+{% endblock %}
