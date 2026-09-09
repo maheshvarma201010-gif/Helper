@@ -25,6 +25,7 @@ class Database:
         self.tedit_jobs = self.db["tedit_jobs"]
         self.tedit_monitoring = self.db["tedit_monitoring"]
         self.auto_approve = self.db["auto_approve"]
+        self.media_files = self.db["media_files"]
 
     async def get_user(self, user_id):
         return await self.users.find_one({"user_id": user_id})
@@ -246,6 +247,24 @@ class Database:
     async def get_auto_approve(self, chat_id):
         data = await self.auto_approve.find_one({"chat_id": chat_id})
         return data["active"] if data else False
+
+    # Media Files Methods
+    async def add_media_file(self, file_data):
+        """Adds or updates a media file record in DB."""
+        file_id = file_data["file_id"]
+        await self.media_files.update_one({"file_id": file_id}, {"$set": file_data}, upsert=True)
+
+    async def get_media_file(self, file_id):
+        """Retrieves a media file record by file_id."""
+        return await self.media_files.find_one({"file_id": file_id})
+
+    async def get_media_file_by_message(self, chat_id, message_id):
+        """Retrieves a media file record by chat_id and message_id."""
+        return await self.media_files.find_one({"chat_id": chat_id, "message_id": message_id})
+
+    async def delete_media_file(self, file_id):
+        """Deletes a media file record by file_id."""
+        await self.media_files.delete_one({"file_id": file_id})
 
     async def reset_user(self, user_id):
         """Resets user state and temporary data to prevent state collision."""
