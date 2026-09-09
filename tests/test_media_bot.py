@@ -2,8 +2,12 @@ import os
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
+from bot.config import Config
 from bot.utils.media import format_audio_tracks_summary, probe_audio_tracks, extract_audio_tracks, _probe_with_ffmpeg
 from bot.database.mongo import db
+
+def test_config_file_channel():
+    assert hasattr(Config, "FILE_CHANNEL")
 
 def test_format_audio_tracks_summary():
     tracks = [
@@ -84,6 +88,8 @@ def test_mongo_media_file_crud():
                 "mime_type": "video/x-matroska",
                 "chat_id": 12345,
                 "message_id": 678,
+                "file_channel_id": -100123456789,
+                "file_channel_message_id": 99,
                 "audio_tracks": [{"audio_index": 0, "title": "Main Track"}]
             }
 
@@ -91,6 +97,7 @@ def test_mongo_media_file_crud():
             fetched = await db.get_media_file("test-uuid-123")
             assert fetched is not None
             assert fetched["file_name"] == "sample.mkv"
+            assert fetched["file_channel_id"] == -100123456789
 
             by_msg = await db.get_media_file_by_message(12345, 678)
             assert by_msg is not None

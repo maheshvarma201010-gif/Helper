@@ -262,6 +262,10 @@ class Bot(Client):
 
         # Get channels from config and database
         channels_to_cache = set(Config.REPLACE_TEXT_CHANNELS)
+        if Config.LOG_CHANNEL:
+            channels_to_cache.add(Config.LOG_CHANNEL)
+        if Config.FILE_CHANNEL:
+            channels_to_cache.add(Config.FILE_CHANNEL)
         source_channel = await db.get_source_channel()
         if source_channel:
             channels_to_cache.add(source_channel)

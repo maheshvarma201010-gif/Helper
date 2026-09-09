@@ -59,6 +59,19 @@ async def process_media_message(client, message, target_msg):
 
             file_size = os.path.getsize(file_path) if os.path.exists(file_path) else getattr(media, "file_size", 0)
 
+            # Copy to FILE_CHANNEL if configured
+            file_channel_id = Config.FILE_CHANNEL
+            file_channel_msg_id = None
+
+            if file_channel_id:
+                try:
+                    copied_msg = await target_msg.copy(chat_id=file_channel_id)
+                    if copied_msg:
+                        file_channel_msg_id = copied_msg.id
+                        logger.info(f"Media copied to FILE_CHANNEL ({file_channel_id}) with msg_id {file_channel_msg_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to copy media to FILE_CHANNEL ({file_channel_id}): {e}")
+
             file_data = {
                 "file_id": file_id,
                 "file_name": file_name,
@@ -68,6 +81,8 @@ async def process_media_message(client, message, target_msg):
                 "mime_type": mime_type or "video/mp4",
                 "chat_id": chat_id,
                 "message_id": msg_id,
+                "file_channel_id": file_channel_id,
+                "file_channel_message_id": file_channel_msg_id,
                 "audio_tracks": tracks
             }
 
