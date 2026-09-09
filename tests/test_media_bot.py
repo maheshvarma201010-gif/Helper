@@ -1,7 +1,8 @@
+import os
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
-from bot.utils.media import format_audio_tracks_summary, probe_audio_tracks
+from bot.utils.media import format_audio_tracks_summary, probe_audio_tracks, extract_audio_tracks, _probe_with_ffmpeg
 from bot.database.mongo import db
 
 def test_format_audio_tracks_summary():
@@ -22,6 +23,31 @@ def test_probe_audio_tracks_nonexistent():
     async def _test():
         tracks = await probe_audio_tracks("non_existent_file.mkv")
         assert tracks == []
+    asyncio.run(_test())
+
+def test_probe_with_ffmpeg_fallback():
+    async def _test():
+        fake_stderr = (
+            "Input #0, matroska, from 'test.mkv':\n"
+            "  Stream #0:0: Video: h264\n"
+            "  Stream #0:1(eng): Audio: aac, 44100 Hz, mono\n"
+            "      Metadata:\n"
+            "        title           : English Track\n"
+            "  Stream #0:2(hin): Audio: ac3, 44100 Hz, mono\n"
+            "      Metadata:\n"
+            "        title           : Hindi Track\n"
+        )
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"", fake_stderr.encode())
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            tracks = await _probe_with_ffmpeg("ffmpeg", "test.mkv")
+            assert len(tracks) == 2
+            assert tracks[0]["title"] == "English Track"
+            assert tracks[0]["language"] == "eng"
+            assert tracks[1]["title"] == "Hindi Track"
+            assert tracks[1]["language"] == "hin"
+
     asyncio.run(_test())
 
 def test_mongo_media_file_crud():

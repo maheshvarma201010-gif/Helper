@@ -108,9 +108,16 @@
             try {
                 const { FFmpeg } = window.FFmpegWasm;
                 ffmpeg = new FFmpeg();
-                logger.info("FFmpeg.wasm initialized");
+                console.log("FFmpeg.wasm initialized");
             } catch (e) {
                 console.warn("FFmpeg.wasm load warning:", e);
+            }
+        }
+
+        function syncVolume() {
+            if (isExternalAudio) {
+                audio.volume = video.volume;
+                audio.muted = video.muted;
             }
         }
 
@@ -119,7 +126,7 @@
             const selectedOption = trackSelect.options[trackSelect.selectedIndex];
 
             if (selectedVal === -1) {
-                // Switch back to embedded audio
+                // Switch back to embedded video audio
                 audio.pause();
                 audio.src = "";
                 video.muted = false;
@@ -127,9 +134,10 @@
                 trackStatus.textContent = "Embedded Video Audio";
             } else {
                 const audioSrc = selectedOption.getAttribute("data-src");
-                video.muted = true; // Mute video native audio
+                video.muted = true; // Mute native video audio
                 audio.src = audioSrc;
                 audio.currentTime = video.currentTime;
+                syncVolume();
 
                 if (!video.paused) {
                     audio.play().catch(e => console.error("Audio playback error:", e));
@@ -144,7 +152,8 @@
         video.addEventListener("play", function () {
             if (isExternalAudio) {
                 audio.currentTime = video.currentTime;
-                audio.play().catch(e => console.error(e));
+                syncVolume();
+                audio.play().catch(e => console.error("Audio play error:", e));
             }
         });
 
@@ -163,6 +172,17 @@
         video.addEventListener("ratechange", function () {
             if (isExternalAudio) {
                 audio.playbackRate = video.playbackRate;
+            }
+        });
+
+        video.addEventListener("volumechange", function () {
+            syncVolume();
+        });
+
+        video.addEventListener("ended", function () {
+            if (isExternalAudio) {
+                audio.pause();
+                audio.currentTime = 0;
             }
         });
     });

@@ -98,9 +98,23 @@ async def download_handler(request):
         return web.Response(text="404 File Not Available on Server", status=404)
 
     filename = file_data.get("file_name", "download.mp4")
+    ext = os.path.splitext(filename)[1].lower()
+
+    content_type = file_data.get("mime_type")
+    if not content_type or content_type == "application/octet-stream":
+        if ext == ".mkv":
+            content_type = "video/x-matroska"
+        elif ext == ".mp4":
+            content_type = "video/mp4"
+        elif ext == ".webm":
+            content_type = "video/webm"
+        else:
+            content_type = "video/mp4"
+
     return web.FileResponse(
         path=file_path,
         headers={
+            "Content-Type": content_type,
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
@@ -131,9 +145,21 @@ async def audio_track_handler(request):
         return web.Response(text="404 Audio Track File Not Found", status=404)
 
     audio_filename = target_track.get("file_name", f"audio_track_{track_index}.aac")
+    ext = os.path.splitext(audio_filename)[1].lower()
+
+    if ext in [".aac", ".m4a"]:
+        audio_content_type = "audio/aac"
+    elif ext == ".mp3":
+        audio_content_type = "audio/mpeg"
+    elif ext == ".ogg":
+        audio_content_type = "audio/ogg"
+    else:
+        audio_content_type = "audio/aac"
+
     return web.FileResponse(
         path=audio_path,
         headers={
+            "Content-Type": audio_content_type,
             "Content-Disposition": f'inline; filename="{audio_filename}"'
         }
     )
