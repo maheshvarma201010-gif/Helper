@@ -1,11 +1,9 @@
 services:
   - type: web
-    name: render-deployer-bot
+    name: telegram-docker-deploy-manager
     env: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: starter
-    region: oregon
+    plan: free
+    dockerfilePath: Dockerfile
     envVars:
       - key: API_ID
         sync: false
@@ -13,9 +11,11 @@ services:
         sync: false
       - key: BOT_TOKEN
         sync: false
-      - key: MONGO_URI
+      - key: ADMIN_IDS
         sync: false
-      - key: RENDER_API_KEY
+      - key: OWNER_ID
         sync: false
-      - key: ENCRYPTION_SECRET
-        generateValue: true
+      - key: BASE_URL
+        sync: false
+      - key: MONGODB_URL
+        sync: false

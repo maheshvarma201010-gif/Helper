@@ -1,9 +1,11 @@
-pyrogram
+pyrogram>=2.0.0
 tgcrypto
+fastapi
+uvicorn[standard]
 motor
 dnspython
+docker
 python-dotenv
-aiohttp
-requests
 pytest
 pytest-asyncio
+httpx
