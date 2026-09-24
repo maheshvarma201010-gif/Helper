@@ -101,7 +101,13 @@ async def env_converter_document_handler(client: Client, message: Message):
         logger.error(f"Error converting document in /env_converter: {e}")
         await msg.edit_text(f"❌ Error processing file: {str(e)}")
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "create_repo", "zip", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "env_converter", "settings"]) & auth_filter, group=3)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter, group=3)
 async def env_converter_text_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = ENV_CONVERTER_SESSIONS.get(user_id)

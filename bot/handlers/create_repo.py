@@ -100,7 +100,13 @@ async def create_github_repo(repo_name: str, github_token: str, private: bool = 
             logger.error(f"Error calling GitHub create repo API: {e}")
             return None
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "create_repo", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter, group=1)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter, group=1)
 async def create_repo_text_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = CREATE_REPO_SESSIONS.get(user_id)

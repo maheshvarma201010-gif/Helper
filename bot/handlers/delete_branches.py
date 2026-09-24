@@ -85,7 +85,13 @@ async def delete_branches_command(client: Client, message: Message):
 
     await init_branch_deletion_wizard(client, message.chat.id, user_id, raw_url)
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "create_repo", "zip", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "delete_branches", "env", "env_converter", "settings"]) & auth_filter, group=4)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter, group=4)
 async def delete_branches_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = DELETE_BRANCHES_SESSIONS.get(user_id)

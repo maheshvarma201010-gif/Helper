@@ -103,7 +103,13 @@ async def update_gh_token_prompt(client: Client, callback_query: CallbackQuery):
     )
 
 # Global Auto-Detection Handler for Render API Key & GitHub Tokens sent anytime
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter, group=-1)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter, group=-1)
 async def auto_token_detector(client: Client, message: Message):
     user_id = message.from_user.id
     text_input = message.text.strip()
@@ -170,7 +176,7 @@ async def auto_token_detector(client: Client, message: Message):
 
     message.continue_propagation()
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter)
 async def settings_key_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     state = SETTINGS_SESSIONS.get(user_id)
