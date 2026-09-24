@@ -144,7 +144,13 @@ async def env_del_prompt(client: Client, callback_query: CallbackQuery):
         ])
     )
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter)
 async def env_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = ENV_SESSIONS.get(user_id)

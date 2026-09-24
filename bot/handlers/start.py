@@ -23,6 +23,7 @@ HELP_TEXT = (
     "• /start - Welcome menu and available actions\n"
     "• /create_repo - Import or create a repository and deploy\n"
     "• /zip - Deploy project directly from .zip archive\n"
+    "• /repo_upload - Upload ZIP file project to GitHub branch\n"
     "• /deploy - Start a new application deployment\n"
     "• /repos - View & deploy public and private GitHub repositories\n"
     "• /projects - List connected Render services\n"
@@ -47,6 +48,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📱 Render Mini App", web_app=WebAppInfo(url=miniapp_url)),
             InlineKeyboardButton("🛠 Create/Import Repo", callback_data="open_create_repo")
+        ],
+        [
+            InlineKeyboardButton("📦 Upload Repo ZIP", callback_data="open_repo_upload")
         ],
         [
             InlineKeyboardButton("🚀 Deploy", callback_data="start_deploy"),
@@ -90,6 +94,20 @@ async def open_create_repo_callback(client: Client, callback_query: CallbackQuer
         "🛠 <b>Repository & Deployment Wizard (/create_repo)</b>\n\n"
         "Would you like to <b>Import</b> an existing repository or <b>Create</b> a brand new repository?",
         reply_markup=get_create_repo_choice_keyboard()
+    )
+
+@Client.on_callback_query(filters.regex("^open_repo_upload$") & auth_filter)
+async def open_repo_upload_callback(client: Client, callback_query: CallbackQuery):
+    from bot.handlers.repo_upload import REPO_UPLOAD_SESSIONS, cleanup_upload_session
+    user_id = callback_query.from_user.id
+    cleanup_upload_session(user_id)
+    REPO_UPLOAD_SESSIONS[user_id] = {"step": "AWAIT_ZIP"}
+    await callback_query.message.edit_text(
+        "📦 <b>Upload Repository from ZIP (/repo_upload)</b>\n\n"
+        "Please send or upload your project `.zip` archive file as a Telegram document.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_repo_upload")]
+        ])
     )
 
 @Client.on_callback_query(filters.regex("^main_menu$") & auth_filter)

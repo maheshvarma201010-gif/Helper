@@ -36,6 +36,7 @@ class RenderDeployerBot(Client):
             BotCommand("start", "Show welcome menu"),
             BotCommand("create_repo", "Import or create a repository"),
             BotCommand("zip", "Deploy project from .zip archive"),
+            BotCommand("repo_upload", "Upload ZIP project to GitHub branch"),
             BotCommand("deploy", "Start a new deployment"),
             BotCommand("projects", "List connected Render services"),
             BotCommand("status", "Show status of services"),

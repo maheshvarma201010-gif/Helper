@@ -26,6 +26,10 @@ def test_docker_inspector_parse_url():
     assert owner == "myorg"
     assert repo == "myrepo"
 
+    owner2, repo2 = DockerInspector.parse_github_url("https://github.com/hemanthbreaker3-hash/Wzmlvt.git")
+    assert owner2 == "hemanthbreaker3-hash"
+    assert repo2 == "Wzmlvt"
+
     owner_short, repo_short = DockerInspector.parse_github_url("myorg/myrepo")
     assert owner_short == "myorg"
     assert repo_short == "myrepo"

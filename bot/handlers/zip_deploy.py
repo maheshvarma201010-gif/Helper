@@ -122,7 +122,13 @@ async def skip_zip_env_vars_callback(client: Client, callback_query: CallbackQue
     session["step"] = "CONFIRMATION"
     await show_zip_deployment_preview(client, callback_query.message.chat.id, user_id)
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "create_repo", "zip", "repos", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter, group=2)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter, group=2)
 async def zip_text_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = ZIP_SESSIONS.get(user_id)

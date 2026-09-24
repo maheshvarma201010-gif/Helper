@@ -335,7 +335,13 @@ async def set_repo_url_callback(client: Client, callback_query: CallbackQuery):
     except RenderAPIError as e:
         await callback_query.answer(f"Failed to change repo: {e.message}", show_alert=True)
 
-@Client.on_message(filters.text & ~filters.command(["start", "help", "deploy", "projects", "status", "logs", "restart", "redeploy", "stop", "delete", "env", "settings"]) & auth_filter)
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter)
 async def project_edit_input_handler(client: Client, message: Message):
     user_id = message.from_user.id
     session = SERVICE_EDIT_SESSIONS.get(user_id)
