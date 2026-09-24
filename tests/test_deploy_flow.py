@@ -4,8 +4,9 @@ from bot.handlers.deploy import (
     DEPLOY_SESSIONS,
     wizard_text_input_handler,
     prompt_step_4_branch,
+    confirm_deploy_callback
 )
-from bot.utils.render_api import RenderAPI
+from bot.utils.render_api import RenderAPI, RenderAPIError
 
 @pytest.mark.asyncio
 async def test_deploy_flow_step_1_invalid_service_name():
@@ -135,7 +136,7 @@ async def test_render_api_create_service_mapping():
         "env": "python",
         "is_docker": False,
         "region": "frankfurt",
-        "plan": "starter",
+        "plan": "free",
         "buildCommand": "pip install -r requirements.txt",
         "startCommand": "python app.py",
         "env_vars": {"FOO": "BAR", "PORT": "8080"}
@@ -156,11 +157,41 @@ async def test_render_api_create_service_mapping():
         assert payload["name"] == "test-service"
         assert payload["branch"] == "main"
         assert payload["serviceDetails"]["region"] == "frankfurt"
-        assert payload["serviceDetails"]["plan"] == "starter"
-        assert payload["serviceDetails"]["env"] == "python"
-        assert payload["serviceDetails"]["buildCommand"] == "pip install -r requirements.txt"
-        assert payload["serviceDetails"]["startCommand"] == "python app.py"
+        assert payload["serviceDetails"]["plan"] == "free"
+        assert payload["serviceDetails"]["runtime"] == "python"
+        assert payload["serviceDetails"]["envSpecificDetails"] == {
+            "buildCommand": "pip install -r requirements.txt",
+            "startCommand": "python app.py"
+        }
         assert payload["serviceDetails"]["envVars"] == [
             {"key": "FOO", "value": "BAR"},
             {"key": "PORT", "value": "8080"}
         ]
+
+@pytest.mark.asyncio
+async def test_confirm_deploy_callback_402_handling():
+    user_id = 9999
+    DEPLOY_SESSIONS[user_id] = {
+        "name": "my-free-app",
+        "repo": "https://github.com/test/repo",
+        "branch": "main",
+        "plan": "free",
+        "type": "web_service"
+    }
+
+    client = MagicMock()
+    callback_query = AsyncMock()
+    callback_query.from_user.id = user_id
+    msg = AsyncMock()
+    callback_query.message.edit_text = AsyncMock(return_value=msg)
+
+    with patch("bot.database.mongo.db.get_user_render_key", new=AsyncMock(return_value="fake_render_key")), \
+         patch("bot.utils.render_api.RenderAPI.create_service", new=AsyncMock(side_effect=RenderAPIError(402, "Payment information is required to complete this request."))) :
+
+        await confirm_deploy_callback(client, callback_query)
+
+        msg.edit_text.assert_called_once()
+        err_text = msg.edit_text.call_args[0][0]
+        assert "Deployment Failed (API Error 402)" in err_text
+        assert "FREE" in err_text
+        assert "https://dashboard.render.com/billing" in err_text

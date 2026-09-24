@@ -610,9 +610,14 @@ async def confirm_deploy_callback(client: Client, callback_query: CallbackQuery)
         )
     except RenderAPIError as e:
         err_msg = f"❌ <b>Deployment Failed (API Error {e.status}):</b> {e.message}"
-        if "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
-            err_msg += "\n\n💡 <b>Tip:</b> Render requires a valid payment method on file to spin up non-free instances or extra resources. Visit https://dashboard.render.com/billing to update billing."
-        await msg.edit_text(err_msg)
+        if e.status == 402 or "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
+            plan_name = str(session.get("plan", "free")).upper()
+            err_msg += (
+                f"\n\n💡 <b>Why did this happen?</b>\n"
+                f"Even though you selected the <b>{plan_name}</b> plan ($0/mo), Render requires a valid credit/debit card on file for account identity verification or when workspace free resource limits have been reached.\n\n"
+                f"👉 <b>To fix this:</b> Add a payment method at <a href='https://dashboard.render.com/billing'>https://dashboard.render.com/billing</a> and try deploying again."
+            )
+        await msg.edit_text(err_msg, disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error creating service: {e}")
         await msg.edit_text(f"❌ <b>Error:</b> {str(e)}")

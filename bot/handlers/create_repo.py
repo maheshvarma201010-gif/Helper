@@ -443,12 +443,16 @@ async def start_create_import_deployment(client: Client, chat_id: int, user_id: 
 
     except RenderAPIError as e:
         err_msg = f"❌ <b>Render Service Creation Error:</b> {e.message}"
-        if "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
-            err_msg += "\n\n💡 <b>Tip:</b> Render may require a valid payment method on file in your account to spin up services or non-free instance types. Visit https://dashboard.render.com/billing to add a card or verify your billing details."
+        if e.status == 402 or "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
+            err_msg += (
+                "\n\n💡 <b>Why did this happen?</b>\n"
+                "Even though you selected the <b>FREE</b> plan ($0/mo), Render requires a valid credit/debit card on file for account verification or when workspace free resource limits have been reached.\n\n"
+                "👉 <b>To fix this:</b> Add a payment method at <a href='https://dashboard.render.com/billing'>https://dashboard.render.com/billing</a> and try again."
+            )
         if message_to_edit:
-            await message_to_edit.edit_text(err_msg)
+            await message_to_edit.edit_text(err_msg, disable_web_page_preview=True)
         else:
-            await client.send_message(chat_id, err_msg)
+            await client.send_message(chat_id, err_msg, disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in start_create_import_deployment: {e}")
         err_msg = f"❌ <b>Error:</b> {str(e)}"

@@ -91,24 +91,42 @@ class RenderAPI:
         else:
             plan_value = raw_plan
 
-        service_details: Dict[str, Any] = {
-            "region": config.get("region", "oregon"),
-            "plan": plan_value,
-            "envVars": env_vars_list
-        }
+        runtime_val = "docker" if is_docker else str(config.get("env", "python")).lower()
 
-        if is_docker:
-            service_details["env"] = "docker"
-            service_details["dockerfilePath"] = config.get("dockerfilePath", "./Dockerfile")
-            service_details["dockerContext"] = config.get("dockerContext", ".")
-            if config.get("healthCheckPath"):
-                service_details["healthCheckPath"] = config.get("healthCheckPath")
+        if srv_type == "static_site":
+            service_details: Dict[str, Any] = {
+                "buildCommand": config.get("buildCommand", ""),
+                "publishPath": config.get("publishPath", "public")
+            }
         else:
-            service_details["env"] = config.get("env", "python")
-            if config.get("buildCommand"):
-                service_details["buildCommand"] = config.get("buildCommand")
-            if config.get("startCommand"):
-                service_details["startCommand"] = config.get("startCommand")
+            service_details = {
+                "region": config.get("region", "oregon"),
+                "plan": plan_value,
+                "runtime": runtime_val,
+                "env": runtime_val,
+                "envVars": env_vars_list
+            }
+
+            if is_docker:
+                docker_details = {
+                    "dockerfilePath": config.get("dockerfilePath", "./Dockerfile"),
+                    "dockerContext": config.get("dockerContext", ".")
+                }
+                if config.get("dockerCommand"):
+                    docker_details["dockerCommand"] = config.get("dockerCommand")
+                service_details["envSpecificDetails"] = docker_details
+                service_details["dockerfilePath"] = config.get("dockerfilePath", "./Dockerfile")
+                service_details["dockerContext"] = config.get("dockerContext", ".")
+            else:
+                native_details = {
+                    "buildCommand": config.get("buildCommand", ""),
+                    "startCommand": config.get("startCommand", "")
+                }
+                service_details["envSpecificDetails"] = native_details
+                if config.get("buildCommand"):
+                    service_details["buildCommand"] = config.get("buildCommand")
+                if config.get("startCommand"):
+                    service_details["startCommand"] = config.get("startCommand")
 
         raw_name = config.get("name") or config.get("repo_name") or "my-service"
         srv_name = sanitize_service_name(raw_name, fallback=config.get("repo_name") or "my-service")
