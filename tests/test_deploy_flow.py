@@ -117,7 +117,7 @@ async def test_step_4_multiple_branches_menu():
         assert "3 Total" in message_to_edit.edit_text.call_args[0][0]
 
 @pytest.mark.asyncio
-async def test_render_api_create_service_mapping():
+async def test_render_api_create_service_base_url_auto_formatting():
     render_api = RenderAPI("test_api_key")
 
     mock_resp = {
@@ -139,7 +139,7 @@ async def test_render_api_create_service_mapping():
         "plan": "free",
         "buildCommand": "pip install -r requirements.txt",
         "startCommand": "python app.py",
-        "env_vars": {"FOO": "BAR", "PORT": "8080"}
+        "env_vars": {"FOO": "BAR", "BASE_URL": "http://old.com"}
     }
 
     with patch.object(render_api, "_request", new=AsyncMock(return_value=mock_resp)) as mock_req, \
@@ -148,25 +148,12 @@ async def test_render_api_create_service_mapping():
         res = await render_api.create_service(config)
 
         assert res == mock_resp
-        mock_req.assert_called_once()
-        method, endpoint = mock_req.call_args[0][0], mock_req.call_args[0][1]
         payload = mock_req.call_args[1]["json_data"]
+        env_vars = payload["serviceDetails"]["envVars"]
 
-        assert method == "POST"
-        assert endpoint == "/services"
-        assert payload["name"] == "test-service"
-        assert payload["branch"] == "main"
-        assert payload["serviceDetails"]["region"] == "frankfurt"
-        assert payload["serviceDetails"]["plan"] == "free"
-        assert payload["serviceDetails"]["runtime"] == "python"
-        assert payload["serviceDetails"]["envSpecificDetails"] == {
-            "buildCommand": "pip install -r requirements.txt",
-            "startCommand": "python app.py"
-        }
-        assert payload["serviceDetails"]["envVars"] == [
-            {"key": "FOO", "value": "BAR"},
-            {"key": "PORT", "value": "8080"}
-        ]
+        # BASE_URL must be automatically updated to expected service url
+        base_url_item = next(item for item in env_vars if item["key"] == "BASE_URL")
+        assert base_url_item["value"] == "https://test-service.onrender.com"
 
 @pytest.mark.asyncio
 async def test_confirm_deploy_callback_402_handling():

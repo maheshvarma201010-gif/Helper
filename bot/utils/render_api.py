@@ -2,6 +2,7 @@ import aiohttp
 import logging
 from typing import Dict, Any, List, Optional
 from bot.utils.formatter import sanitize_service_name
+from bot.utils.env_updater import update_env_base_urls
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,14 @@ class RenderAPI:
 
         srv_type = config.get("type", "web_service")
         is_docker = config.get("is_docker", False) or (config.get("env") == "docker")
-        env_vars_list = [{"key": k, "value": v} for k, v in config.get("env_vars", {}).items()]
+
+        raw_name = config.get("name") or config.get("repo_name") or "my-service"
+        srv_name = sanitize_service_name(raw_name, fallback=config.get("repo_name") or "my-service")
+        expected_url = f"https://{srv_name}.onrender.com"
+
+        raw_env_vars = config.get("env_vars", {})
+        synced_env_vars = update_env_base_urls(raw_env_vars, new_url=expected_url)
+        env_vars_list = [{"key": k, "value": v} for k, v in synced_env_vars.items()]
 
         raw_plan = str(config.get("plan") or config.get("instance_type") or "free").lower().strip()
         if raw_plan in ["free", "0", "0/mo", "$0/mo", "select_plan_free", "zip_plan_free"]:
@@ -128,9 +136,6 @@ class RenderAPI:
                 if config.get("startCommand"):
                     service_details["startCommand"] = config.get("startCommand")
 
-        raw_name = config.get("name") or config.get("repo_name") or "my-service"
-        srv_name = sanitize_service_name(raw_name, fallback=config.get("repo_name") or "my-service")
-
         payload = {
             "type": srv_type,
             "name": srv_name,
@@ -142,6 +147,31 @@ class RenderAPI:
         }
 
         return await self._request("POST", "/services", json_data=payload)
+
+    async def ensure_base_url_sync(self, service_id: str) -> None:
+        """
+        Ensures BASE_URL (and matching URL environment variables) points
+        to the service's current Render URL prior to redeployments.
+        """
+        try:
+            service_data = await self.get_service(service_id)
+            srv = service_data.get("service", service_data)
+            srv_name = srv.get("name")
+            srv_details = srv.get("serviceDetails", {})
+            current_url = srv_details.get("url") or srv.get("url") or (f"https://{srv_name}.onrender.com" if srv_name else "")
+
+            if not current_url:
+                return
+
+            current_env_vars = await self.get_env_vars(service_id)
+            updated_env_vars = update_env_base_urls(current_env_vars, new_url=current_url)
+
+            # Update if BASE_URL or any URL env var changed
+            if updated_env_vars != current_env_vars:
+                logger.info(f"Syncing BASE_URL to {current_url} for service {service_id}")
+                await self.update_env_vars(service_id, updated_env_vars)
+        except Exception as e:
+            logger.warning(f"Failed to sync BASE_URL for service {service_id}: {e}")
 
     async def delete_service(self, service_id: str) -> bool:
         return await self._request("DELETE", f"/services/{service_id}")
@@ -156,6 +186,7 @@ class RenderAPI:
         return await self._request("POST", f"/services/{service_id}/resume")
 
     async def redeploy_service(self, service_id: str, clear_cache: bool = False) -> Dict[str, Any]:
+        await self.ensure_base_url_sync(service_id)
         params = {"clearCache": "clear"} if clear_cache else {}
         return await self._request("POST", f"/services/{service_id}/deploys", params=params)
 
