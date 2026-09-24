@@ -322,7 +322,7 @@ async def show_cr_deployment_preview(client: Client, chat_id: int, user_id: int)
         "repo": session.get("repo"),
         "branch": session.get("branch", "main"),
         "region": "oregon",
-        "instance_type": session.get("instance_type", "free"),
+        "instance_type": session.get("instance_type") or session.get("plan") or "free",
         "is_docker": True,
         "dockerfilePath": "./Dockerfile",
         "dockerContext": ".",

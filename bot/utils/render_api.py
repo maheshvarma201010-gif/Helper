@@ -70,17 +70,17 @@ class RenderAPI:
         is_docker = config.get("is_docker", False)
         env_vars_list = [{"key": k, "value": v} for k, v in config.get("env_vars", {}).items()]
 
-        plan_choice = str(config.get("instance_type") or config.get("plan") or "free").lower().strip()
-        if plan_choice in ["free", "0", "0/mo", "$0/mo"]:
+        raw_plan = str(config.get("instance_type") or config.get("plan") or "free").lower().strip()
+        if raw_plan in ["free", "0", "0/mo", "$0/mo", "select_plan_free", "zip_plan_free"]:
             plan_value = "free"
-        elif plan_choice in ["starter", "7", "7/mo", "$7/mo"]:
+        elif raw_plan in ["starter", "7", "7/mo", "$7/mo", "select_plan_starter", "zip_plan_starter"]:
             plan_value = "starter"
-        elif plan_choice in ["standard"]:
+        elif raw_plan in ["standard"]:
             plan_value = "standard"
-        elif plan_choice in ["pro"]:
+        elif raw_plan in ["pro"]:
             plan_value = "pro"
         else:
-            plan_value = plan_choice
+            plan_value = raw_plan
 
         service_details: Dict[str, Any] = {
             "region": config.get("region", "oregon"),
