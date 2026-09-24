@@ -4,9 +4,8 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from bot.database.mongo import db
 from bot.utils.security import auth_filter
-from bot.utils.github_check import check_user_github_connection
 from bot.utils.docker_inspector import DockerInspector
-from bot.handlers.deploy import DEPLOY_SESSIONS, fetch_and_show_branches
+from bot.handlers.deploy import DEPLOY_SESSIONS, prompt_step_4_branch
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +128,10 @@ async def deploy_repo_callback(client: Client, callback_query: CallbackQuery):
     repo_short = parts[1] if len(parts) == 2 else repo_name
 
     DEPLOY_SESSIONS[user_id] = {
-        "step": "AWAIT_BRANCH_SELECT",
-        "is_docker": True, # Default to Dockerfile mode for quick repo deploy
+        "step": "AWAIT_SERVICE_NAME",
+        "name": repo_short,
+        "is_docker": True,
+        "env": "docker",
         "repo": selected_repo.get("html_url", f"https://github.com/{full_name}"),
         "owner": owner,
         "repo_name": repo_short,
@@ -138,4 +139,4 @@ async def deploy_repo_callback(client: Client, callback_query: CallbackQuery):
     }
 
     await callback_query.message.edit_text(f"✅ Selected Repository: <code>{full_name}</code>")
-    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, DEPLOY_SESSIONS[user_id])
+    await prompt_step_4_branch(client, callback_query.message.chat.id, user_id, DEPLOY_SESSIONS[user_id])

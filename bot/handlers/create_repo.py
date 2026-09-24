@@ -9,7 +9,7 @@ from bot.utils.docker_inspector import DockerInspector
 from bot.utils.render_api import RenderAPI, RenderAPIError
 from bot.utils.formatter import sanitize_service_name, format_deployment_preview
 from bot.utils.env_converter_util import parse_env_input
-from bot.handlers.deploy import DEPLOY_SESSIONS, fetch_and_show_branches
+from bot.handlers.deploy import DEPLOY_SESSIONS
 
 logger = logging.getLogger(__name__)
 

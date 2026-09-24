@@ -86,17 +86,19 @@ def format_service_card(service: Dict[str, Any], last_deploy: Optional[Dict[str,
     return "\n".join(lines)
 
 def format_deployment_preview(config: Dict[str, Any]) -> str:
-    is_docker = config.get("is_docker", False)
+    runtime = config.get("env", "docker" if config.get("is_docker") else "python")
+    is_docker = (runtime == "docker") or config.get("is_docker", False)
+
     lines = [
         "🚀 <b>Deployment Preview</b>",
         "───────────────",
-        f"<b>Service Name:</b> <code>{config.get('name')}</code>",
-        f"<b>Service Type:</b> {config.get('type')}",
-        f"<b>Repository:</b> <code>{config.get('repo')}</code>",
-        f"<b>Branch:</b> <code>{config.get('branch', 'main')}</code>",
-        f"<b>Region:</b> {config.get('region', 'oregon')}",
-        f"<b>Instance Type:</b> {config.get('instance_type', 'starter')}",
-        f"<b>Deployment Mode:</b> {'🐳 Dockerfile' if is_docker else '🛠 Standard (Build/Start)'}"
+        f"<b>1. Service Name:</b> <code>{config.get('name')}</code>",
+        f"<b>2. Repository:</b> <code>{config.get('repo')}</code>",
+        f"<b>3. Language/Runtime:</b> {runtime}",
+        f"<b>4. Branch:</b> <code>{config.get('branch', 'main')}</code>",
+        f"<b>5. Region:</b> {config.get('region', 'oregon')}",
+        f"<b>6. Compute Plan:</b> {config.get('plan', config.get('instance_type', 'free'))}",
+        f"<b>7. Service Type:</b> {config.get('type', 'web_service')}"
     ]
 
     if is_docker:
@@ -108,8 +110,8 @@ def format_deployment_preview(config: Dict[str, Any]) -> str:
 
     env_vars = config.get("env_vars", {})
     if env_vars:
-        lines.append(f"<b>Environment Variables:</b> {len(env_vars)} configured")
+        lines.append(f"<b>8. Environment Variables:</b> {len(env_vars)} configured")
     else:
-        lines.append("<b>Environment Variables:</b> None")
+        lines.append("<b>8. Environment Variables:</b> None")
 
     return "\n".join(lines)

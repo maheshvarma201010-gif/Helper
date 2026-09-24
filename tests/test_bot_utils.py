@@ -58,13 +58,14 @@ def test_formatter_preview():
         "type": "web_service",
         "repo": "https://github.com/owner/repo",
         "branch": "main",
+        "env": "docker",
         "is_docker": True,
         "dockerfilePath": "./Dockerfile",
         "dockerContext": ".",
         "env_vars": {"ENV": "prod"}
     }
     preview = format_deployment_preview(docker_cfg)
-    assert "🐳 Dockerfile" in preview
+    assert "docker" in preview
     assert "Dockerfile Path" in preview
     assert "Build Command" not in preview
     assert "Start Command" not in preview

@@ -31,7 +31,12 @@ class RenderAPI:
                         return True
                     data = await resp.json() if resp.content_type == 'application/json' else await resp.text()
                     if resp.status >= 400:
-                        err_msg = data.get("message", str(data)) if isinstance(data, dict) else str(data)
+                        if isinstance(data, dict):
+                            err_msg = data.get("message") or data.get("error") or str(data)
+                        elif isinstance(data, list):
+                            err_msg = "; ".join([str(item) for item in data])
+                        else:
+                            err_msg = str(data)
                         logger.error(f"Render API HTTP {resp.status} for {endpoint}: {err_msg}")
                         raise RenderAPIError(resp.status, err_msg)
                     return data
@@ -67,18 +72,22 @@ class RenderAPI:
             owner_id = await self.get_owner_id()
 
         srv_type = config.get("type", "web_service")
-        is_docker = config.get("is_docker", False)
+        is_docker = config.get("is_docker", False) or (config.get("env") == "docker")
         env_vars_list = [{"key": k, "value": v} for k, v in config.get("env_vars", {}).items()]
 
-        raw_plan = str(config.get("instance_type") or config.get("plan") or "free").lower().strip()
+        raw_plan = str(config.get("plan") or config.get("instance_type") or "free").lower().strip()
         if raw_plan in ["free", "0", "0/mo", "$0/mo", "select_plan_free", "zip_plan_free"]:
             plan_value = "free"
         elif raw_plan in ["starter", "7", "7/mo", "$7/mo", "select_plan_starter", "zip_plan_starter"]:
             plan_value = "starter"
-        elif raw_plan in ["standard"]:
+        elif raw_plan in ["standard", "25", "$25/mo"]:
             plan_value = "standard"
-        elif raw_plan in ["pro"]:
+        elif raw_plan in ["pro", "85", "$85/mo"]:
             plan_value = "pro"
+        elif raw_plan in ["pro_plus", "175", "$175/mo"]:
+            plan_value = "pro_plus"
+        elif raw_plan in ["extra_pro", "225", "$225/mo"]:
+            plan_value = "extra_pro"
         else:
             plan_value = raw_plan
 
