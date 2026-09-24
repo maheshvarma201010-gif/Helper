@@ -443,6 +443,8 @@ async def start_create_import_deployment(client: Client, chat_id: int, user_id: 
 
     except RenderAPIError as e:
         err_msg = f"❌ <b>Render Service Creation Error:</b> {e.message}"
+        if "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
+            err_msg += "\n\n💡 <b>Tip:</b> Render may require a valid payment method on file in your account to spin up services or non-free instance types. Visit https://dashboard.render.com/billing to add a card or verify your billing details."
         if message_to_edit:
             await message_to_edit.edit_text(err_msg)
         else:

@@ -277,6 +277,8 @@ async def execute_zip_deployment(client: Client, chat_id: int, user_id: int, ses
 
     except RenderAPIError as e:
         err_msg = f"❌ <b>Render Deployment Error:</b> {e.message}"
+        if "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
+            err_msg += "\n\n💡 <b>Tip:</b> Render may require a verified payment method on file to spin up services or non-free instance types. Visit https://dashboard.render.com/billing to attach a card or ensure Free plan is selected."
         if message_to_edit:
             await message_to_edit.edit_text(err_msg)
         else:
