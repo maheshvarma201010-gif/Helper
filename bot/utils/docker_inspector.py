@@ -18,16 +18,27 @@ class DockerInspector:
     def parse_github_url(url: str) -> Optional[Tuple[str, str]]:
         if not url:
             return None
-        url = url.strip()
-        pattern_full = r"github\.com/([^/]+)/([^/\s.]+)"
+        url = url.strip().rstrip("/")
+        if url.endswith(".git"):
+            url = url[:-4]
+
+        pattern_full = r"github\.com/([^/\s]+)/([^/\s]+)"
         match = re.search(pattern_full, url)
         if match:
-            return match.group(1), match.group(2).rstrip(".git")
+            owner = match.group(1)
+            repo = match.group(2)
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            return owner, repo
 
         pattern_short = r"^([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)$"
         match_short = re.match(pattern_short, url)
         if match_short:
-            return match_short.group(1), match_short.group(2)
+            owner = match_short.group(1)
+            repo = match_short.group(2)
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            return owner, repo
 
         return None
 
