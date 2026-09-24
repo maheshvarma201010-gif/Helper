@@ -74,7 +74,11 @@ class FreeTierLimitNotifier:
                         await self.bot_client.send_message(user_id, msg_text, reply_markup=kb)
                         logger.info(f"Sent hourly free tier expiry reminder to user {user_id}")
                     except Exception as err_msg:
-                        logger.warning(f"Failed to send hourly limit notification to {user_id}: {err_msg}")
+                        err_str = str(err_msg)
+                        if "PEER_ID_INVALID" in err_str or "USER_IS_BLOCKED" in err_str or "INPUT_USER_DEACTIVATED" in err_str:
+                            logger.info(f"Skipping limit notification for unreachable Telegram user {user_id}: {err_str}")
+                        else:
+                            logger.warning(f"Failed to send hourly limit notification to {user_id}: {err_msg}")
 
             except Exception as e:
                 logger.warning(f"Error checking free tier status for user {user_id}: {e}")

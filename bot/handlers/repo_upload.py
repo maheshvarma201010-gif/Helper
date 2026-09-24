@@ -81,6 +81,109 @@ async def create_github_branch_api(owner: str, repo: str, branch: str, token: st
 
     return False
 
+async def upload_via_github_api(
+    extract_dir: str,
+    owner: str,
+    repo: str,
+    branch: str,
+    token: str
+) -> Tuple[bool, str]:
+    """Fallback method using GitHub REST API Git Trees to commit and push files if Git CLI is unavailable."""
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "RenderDeployerBot"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            # 1. Get latest commit SHA on branch
+            ref_url = f"https://api.github.com/repos/{owner}/{repo}/git/ref/heads/{branch}"
+            async with session.get(ref_url, headers=headers, timeout=10) as resp:
+                if resp.status != 200:
+                    return False, f"Could not find branch ref for '{branch}' on GitHub."
+                ref_data = await resp.json()
+                commit_sha = ref_data.get("object", {}).get("sha")
+
+            # 2. Get tree SHA for that commit
+            commit_url = f"https://api.github.com/repos/{owner}/{repo}/git/commits/{commit_sha}"
+            async with session.get(commit_url, headers=headers, timeout=10) as resp:
+                if resp.status != 200:
+                    return False, "Could not fetch commit object."
+                commit_data = await resp.json()
+                base_tree_sha = commit_data.get("tree", {}).get("sha")
+
+            # 3. Create blobs for each file
+            tree_items = []
+            for root, _, files in os.walk(extract_dir):
+                for file_name in files:
+                    full_path = os.path.join(root, file_name)
+                    rel_path = os.path.relpath(full_path, extract_dir).replace("\\", "/")
+                    if rel_path.startswith(".git"):
+                        continue
+
+                    try:
+                        with open(full_path, "rb") as f:
+                            content_bytes = f.read()
+
+                        import base64
+                        b64_content = base64.b64encode(content_bytes).decode("utf-8")
+
+                        blob_url = f"https://api.github.com/repos/{owner}/{repo}/git/blobs"
+                        blob_payload = {"content": b64_content, "encoding": "base64"}
+                        async with session.post(blob_url, headers=headers, json=blob_payload, timeout=15) as b_resp:
+                            if b_resp.status not in [200, 201]:
+                                continue
+                            b_data = await b_resp.json()
+                            blob_sha = b_data.get("sha")
+
+                        tree_items.append({
+                            "path": rel_path,
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": blob_sha
+                        })
+                    except Exception as e_f:
+                        logger.warning(f"Failed to create blob for {rel_path}: {e_f}")
+
+            if not tree_items:
+                return False, "No valid files found in extracted archive to commit."
+
+            # 4. Create new tree
+            create_tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees"
+            tree_payload = {"base_tree": base_tree_sha, "tree": tree_items}
+            async with session.post(create_tree_url, headers=headers, json=tree_payload, timeout=20) as t_resp:
+                if t_resp.status not in [200, 201]:
+                    return False, "Failed to create Git tree via GitHub API."
+                t_data = await t_resp.json()
+                new_tree_sha = t_data.get("sha")
+
+            # 5. Create new commit
+            create_commit_url = f"https://api.github.com/repos/{owner}/{repo}/git/commits"
+            c_payload = {
+                "message": f"Upload repository files to {branch} via Telegram Bot (API Fallback)",
+                "tree": new_tree_sha,
+                "parents": [commit_sha]
+            }
+            async with session.post(create_commit_url, headers=headers, json=c_payload, timeout=15) as c_resp:
+                if c_resp.status not in [200, 201]:
+                    return False, "Failed to create commit via GitHub API."
+                c_data = await c_resp.json()
+                new_commit_sha = c_data.get("sha")
+
+            # 6. Update branch reference
+            update_ref_url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/heads/{branch}"
+            update_payload = {"sha": new_commit_sha, "force": True}
+            async with session.patch(update_ref_url, headers=headers, json=update_payload, timeout=15) as u_resp:
+                if u_resp.status == 200:
+                    return True, f"Successfully uploaded files to branch '{branch}' via GitHub API."
+                else:
+                    return False, "Failed to update branch reference on GitHub."
+
+        except Exception as e:
+            logger.error(f"Error in upload_via_github_api: {e}")
+            return False, str(e)
+
 async def upload_extracted_files_to_branch(
     extract_dir: str,
     owner: str,
@@ -95,11 +198,15 @@ async def upload_extracted_files_to_branch(
 
     try:
         # Step 1: Attempt to clone existing repository
-        clone_proc = await asyncio.create_subprocess_exec(
-            "git", "clone", auth_url, work_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        try:
+            clone_proc = await asyncio.create_subprocess_exec(
+                "git", "clone", auth_url, work_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+        except FileNotFoundError:
+            logger.warning("Git CLI binary not found on system. Falling back to GitHub REST API...")
+            return await upload_via_github_api(extract_dir, owner, repo, branch, token)
         _, stderr_clone = await clone_proc.communicate()
 
         is_cloned = (clone_proc.returncode == 0)
