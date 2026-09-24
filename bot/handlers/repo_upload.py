@@ -31,6 +31,22 @@ def cleanup_upload_session(user_id: int):
         except Exception as e:
             logger.warning(f"Failed to cleanup temp_dir for user {user_id}: {e}")
 
+async def check_branch_exists(owner: str, repo: str, branch: str, token: str) -> bool:
+    """Checks if a branch exists on a GitHub repository."""
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "RenderDeployerBot"
+    }
+    url = f"https://api.github.com/repos/{owner}/{repo}/branches/{branch.strip()}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                return resp.status == 200
+        except Exception as e:
+            logger.warning(f"Failed checking branch existence: {e}")
+            return False
+
 async def create_github_branch_api(owner: str, repo: str, branch: str, token: str) -> bool:
     """Create a new branch on GitHub using the REST API if it doesn't already exist."""
     headers = {
@@ -119,7 +135,7 @@ async def upload_via_github_api(
                 for file_name in files:
                     full_path = os.path.join(root, file_name)
                     rel_path = os.path.relpath(full_path, extract_dir).replace("\\", "/")
-                    if rel_path.startswith(".git"):
+                    if rel_path.startswith(".git") or rel_path.startswith(".github/workflows"):
                         continue
 
                     try:
@@ -261,6 +277,28 @@ async def upload_extracted_files_to_branch(
             return True, f"Successfully created branch '{branch}' and uploaded files to {owner}/{repo}."
         else:
             err_msg = stderr_push.decode().strip() or "Git push failed."
+
+            # If failed due to workflow scope limitation, strip .github/workflows directory and retry
+            if "workflow" in err_msg.lower() and "scope" in err_msg.lower():
+                logger.info("Workflow scope error detected. Stripping .github/workflows and retrying git push...")
+                github_workflows_path = os.path.join(work_dir, ".github", "workflows")
+                if os.path.exists(github_workflows_path):
+                    shutil.rmtree(github_workflows_path, ignore_errors=True)
+
+                rm_proc = await asyncio.create_subprocess_exec("git", "rm", "-rf", ".github/workflows", cwd=work_dir, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                await rm_proc.communicate()
+
+                await (await asyncio.create_subprocess_exec("git", "add", "-A", cwd=work_dir)).wait()
+                await (await asyncio.create_subprocess_exec("git", "commit", "-m", "Remove workflows to bypass PAT scope restriction", cwd=work_dir)).wait()
+
+                push_retry_proc = await asyncio.create_subprocess_exec("git", "push", "-u", "origin", branch, "--force", cwd=work_dir, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, stderr_retry = await push_retry_proc.communicate()
+
+                if push_retry_proc.returncode == 0:
+                    return True, f"Successfully created branch '{branch}' and uploaded files to {owner}/{repo} (workflows removed due to PAT token scope)."
+                else:
+                    err_msg = stderr_retry.decode().strip() or err_msg
+
             return False, f"Git push error: {err_msg}"
 
     except Exception as e:
@@ -380,12 +418,12 @@ async def repo_upload_text_handler(client: Client, message: Message):
 
     elif step == "AWAIT_BRANCH":
         branch_name = text
+        session["base_branch"] = branch_name
         session["branch"] = branch_name
 
         # Check saved GitHub PAT token
         saved_token = await db.get_user_github_token(user_id)
         if saved_token:
-            # Try fetching username for saved token
             fetched_username = None
             async with aiohttp.ClientSession() as http_sess:
                 try:
@@ -399,9 +437,7 @@ async def repo_upload_text_handler(client: Client, message: Message):
             if fetched_username:
                 session["username"] = fetched_username
                 session["token"] = saved_token
-                session["step"] = "CONFIRMATION"
-
-                await show_upload_confirmation(client, message.chat.id, user_id)
+                await handle_branch_and_proceed(client, message.chat.id, user_id, session)
                 return
 
         session["step"] = "AWAIT_USERNAME"
@@ -427,8 +463,61 @@ async def repo_upload_text_handler(client: Client, message: Message):
 
     elif step == "AWAIT_TOKEN":
         session["token"] = text
+        await handle_branch_and_proceed(client, message.chat.id, user_id, session)
+
+async def handle_branch_and_proceed(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
+    owner = session["owner"]
+    repo = session["repo"]
+    branch = session["branch"]
+    token = session["token"]
+
+    exists = await check_branch_exists(owner, repo, branch, token)
+    if exists:
+        suffix1 = f"{branch}_1"
+        suffix2 = f"{branch}_2"
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"🔄 Replace Existing '{branch}'", callback_data=f"ru_branch_opt_replace")],
+            [
+                InlineKeyboardButton(f"➕ Create '{suffix1}'", callback_data="ru_branch_opt_suffix1"),
+                InlineKeyboardButton(f"➕ Create '{suffix2}'", callback_data="ru_branch_opt_suffix2")
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_repo_upload")]
+        ])
+
+        session["step"] = "SELECT_BRANCH_ACTION"
+        await client.send_message(
+            chat_id,
+            f"⚠️ <b>Branch Already Exists!</b>\n\n"
+            f"The branch <code>{branch}</code> already exists on <code>{owner}/{repo}</code>.\n\n"
+            "Would you like to <b>replace/overwrite</b> the existing branch or <b>create a new branch</b> with a suffix?",
+            reply_markup=kb
+        )
+    else:
         session["step"] = "CONFIRMATION"
-        await show_upload_confirmation(client, message.chat.id, user_id)
+        await show_upload_confirmation(client, chat_id, user_id)
+
+@Client.on_callback_query(filters.regex("^ru_branch_opt_(replace|suffix1|suffix2)$") & auth_filter)
+async def ru_branch_opt_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    action = callback_query.matches[0].group(1)
+    session = REPO_UPLOAD_SESSIONS.get(user_id)
+    if not session:
+        await callback_query.message.edit_text("❌ Session expired. Please run /repo_upload again.")
+        return
+
+    base_branch = session.get("base_branch") or session.get("branch", "main")
+
+    if action == "suffix1":
+        session["branch"] = f"{base_branch}_1"
+    elif action == "suffix2":
+        session["branch"] = f"{base_branch}_2"
+    else:
+        session["branch"] = base_branch
+
+    session["step"] = "CONFIRMATION"
+    await callback_query.message.delete()
+    await show_upload_confirmation(client, callback_query.message.chat.id, user_id)
 
 async def show_upload_confirmation(client: Client, chat_id: int, user_id: int):
     session = REPO_UPLOAD_SESSIONS.get(user_id)

@@ -104,9 +104,35 @@ async def test_repo_upload_text_handler_flow(mock_message):
     # Step 4: Send PAT Token
     mock_message.text = "ghp_1234567890abcdef"
     client = AsyncMock()
-    await repo_upload_text_handler(client, mock_message)
+    with patch("bot.handlers.repo_upload.check_branch_exists", AsyncMock(return_value=False)):
+        await repo_upload_text_handler(client, mock_message)
     assert REPO_UPLOAD_SESSIONS[user_id]["step"] == "CONFIRMATION"
     client.send_message.assert_called_once()
+
+    cleanup_upload_session(user_id)
+
+@pytest.mark.asyncio
+async def test_existing_branch_option_prompt(mock_message):
+    user_id = 12345
+    REPO_UPLOAD_SESSIONS[user_id] = {
+        "step": "AWAIT_TOKEN",
+        "owner": "octocat",
+        "repo": "Hello-World",
+        "branch": "main",
+        "base_branch": "main",
+        "username": "octocat"
+    }
+
+    mock_message.text = "ghp_1234567890abcdef"
+    client = AsyncMock()
+
+    # Simulate branch already existing
+    with patch("bot.handlers.repo_upload.check_branch_exists", AsyncMock(return_value=True)):
+        await repo_upload_text_handler(client, mock_message)
+
+    assert REPO_UPLOAD_SESSIONS[user_id]["step"] == "SELECT_BRANCH_ACTION"
+    client.send_message.assert_called_once()
+    assert "Branch Already Exists" in client.send_message.call_args[0][1]
 
     cleanup_upload_session(user_id)
 
