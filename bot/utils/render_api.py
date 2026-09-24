@@ -31,7 +31,12 @@ class RenderAPI:
                         return True
                     data = await resp.json() if resp.content_type == 'application/json' else await resp.text()
                     if resp.status >= 400:
-                        err_msg = data.get("message", str(data)) if isinstance(data, dict) else str(data)
+                        if isinstance(data, dict):
+                            err_msg = data.get("message") or data.get("error") or str(data)
+                        elif isinstance(data, list):
+                            err_msg = "; ".join([str(item) for item in data])
+                        else:
+                            err_msg = str(data)
                         logger.error(f"Render API HTTP {resp.status} for {endpoint}: {err_msg}")
                         raise RenderAPIError(resp.status, err_msg)
                     return data
@@ -67,39 +72,61 @@ class RenderAPI:
             owner_id = await self.get_owner_id()
 
         srv_type = config.get("type", "web_service")
-        is_docker = config.get("is_docker", False)
+        is_docker = config.get("is_docker", False) or (config.get("env") == "docker")
         env_vars_list = [{"key": k, "value": v} for k, v in config.get("env_vars", {}).items()]
 
-        raw_plan = str(config.get("instance_type") or config.get("plan") or "free").lower().strip()
+        raw_plan = str(config.get("plan") or config.get("instance_type") or "free").lower().strip()
         if raw_plan in ["free", "0", "0/mo", "$0/mo", "select_plan_free", "zip_plan_free"]:
             plan_value = "free"
         elif raw_plan in ["starter", "7", "7/mo", "$7/mo", "select_plan_starter", "zip_plan_starter"]:
             plan_value = "starter"
-        elif raw_plan in ["standard"]:
+        elif raw_plan in ["standard", "25", "$25/mo"]:
             plan_value = "standard"
-        elif raw_plan in ["pro"]:
+        elif raw_plan in ["pro", "85", "$85/mo"]:
             plan_value = "pro"
+        elif raw_plan in ["pro_plus", "175", "$175/mo"]:
+            plan_value = "pro_plus"
+        elif raw_plan in ["extra_pro", "225", "$225/mo"]:
+            plan_value = "extra_pro"
         else:
             plan_value = raw_plan
 
-        service_details: Dict[str, Any] = {
-            "region": config.get("region", "oregon"),
-            "plan": plan_value,
-            "envVars": env_vars_list
-        }
+        runtime_val = "docker" if is_docker else str(config.get("env", "python")).lower()
 
-        if is_docker:
-            service_details["env"] = "docker"
-            service_details["dockerfilePath"] = config.get("dockerfilePath", "./Dockerfile")
-            service_details["dockerContext"] = config.get("dockerContext", ".")
-            if config.get("healthCheckPath"):
-                service_details["healthCheckPath"] = config.get("healthCheckPath")
+        if srv_type == "static_site":
+            service_details: Dict[str, Any] = {
+                "buildCommand": config.get("buildCommand", ""),
+                "publishPath": config.get("publishPath", "public")
+            }
         else:
-            service_details["env"] = config.get("env", "python")
-            if config.get("buildCommand"):
-                service_details["buildCommand"] = config.get("buildCommand")
-            if config.get("startCommand"):
-                service_details["startCommand"] = config.get("startCommand")
+            service_details = {
+                "region": config.get("region", "oregon"),
+                "plan": plan_value,
+                "runtime": runtime_val,
+                "env": runtime_val,
+                "envVars": env_vars_list
+            }
+
+            if is_docker:
+                docker_details = {
+                    "dockerfilePath": config.get("dockerfilePath", "./Dockerfile"),
+                    "dockerContext": config.get("dockerContext", ".")
+                }
+                if config.get("dockerCommand"):
+                    docker_details["dockerCommand"] = config.get("dockerCommand")
+                service_details["envSpecificDetails"] = docker_details
+                service_details["dockerfilePath"] = config.get("dockerfilePath", "./Dockerfile")
+                service_details["dockerContext"] = config.get("dockerContext", ".")
+            else:
+                native_details = {
+                    "buildCommand": config.get("buildCommand", ""),
+                    "startCommand": config.get("startCommand", "")
+                }
+                service_details["envSpecificDetails"] = native_details
+                if config.get("buildCommand"):
+                    service_details["buildCommand"] = config.get("buildCommand")
+                if config.get("startCommand"):
+                    service_details["startCommand"] = config.get("startCommand")
 
         raw_name = config.get("name") or config.get("repo_name") or "my-service"
         srv_name = sanitize_service_name(raw_name, fallback=config.get("repo_name") or "my-service")

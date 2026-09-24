@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from bot.database.mongo import db
@@ -7,41 +8,81 @@ from bot.utils.security import auth_filter
 from bot.utils.github_check import check_user_github_connection
 from bot.utils.docker_inspector import DockerInspector
 from bot.utils.render_api import RenderAPI, RenderAPIError
-from bot.utils.formatter import format_deployment_preview, sanitize_service_name
+from bot.utils.formatter import format_deployment_preview, sanitize_service_name, get_status_badge
 from bot.utils.env_converter_util import parse_env_input
 
 logger = logging.getLogger(__name__)
 
 DEPLOY_SESSIONS: Dict[int, Dict[str, Any]] = {}
 
+ALL_COMMANDS = [
+    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
+    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
+    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
+]
+
+# --- Keyboards ---
+
+def get_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+    ])
+
+def get_runtime_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🐳 Docker", callback_data="select_runtime_docker"),
+            InlineKeyboardButton("🐍 Python", callback_data="select_runtime_python")
+        ],
+        [
+            InlineKeyboardButton("🟢 Node.js", callback_data="select_runtime_node"),
+            InlineKeyboardButton("🐹 Go", callback_data="select_runtime_go")
+        ],
+        [
+            InlineKeyboardButton("💎 Ruby", callback_data="select_runtime_ruby"),
+            InlineKeyboardButton("🦀 Rust", callback_data="select_runtime_rust")
+        ],
+        [
+            InlineKeyboardButton("💧 Elixir", callback_data="select_runtime_elixir"),
+            InlineKeyboardButton("📄 Static Site", callback_data="select_runtime_static")
+        ],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+    ])
+
+def get_region_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇺🇸 Oregon (us-west)", callback_data="select_region_oregon"),
+            InlineKeyboardButton("🇩🇪 Frankfurt (eu-central)", callback_data="select_region_frankfurt")
+        ],
+        [
+            InlineKeyboardButton("🇸🇬 Singapore (ap-southeast)", callback_data="select_region_singapore"),
+            InlineKeyboardButton("🇺🇸 Ohio (us-east)", callback_data="select_region_ohio")
+        ],
+        [
+            InlineKeyboardButton("🇺🇸 Virginia (us-east)", callback_data="select_region_virginia")
+        ],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+    ])
+
 def get_plan_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🆓 Free Plan ($0/mo)", callback_data="select_plan_free"),
-            InlineKeyboardButton("🚀 Starter Plan ($7/mo)", callback_data="select_plan_starter")
+            InlineKeyboardButton("🆓 Free ($0/mo)", callback_data="select_plan_free"),
+            InlineKeyboardButton("🚀 Starter ($7/mo)", callback_data="select_plan_starter")
+        ],
+        [
+            InlineKeyboardButton("⚡ Standard ($25/mo)", callback_data="select_plan_standard"),
+            InlineKeyboardButton("💼 Pro ($85/mo)", callback_data="select_plan_pro")
+        ],
+        [
+            InlineKeyboardButton("🔥 Pro Plus ($175/mo)", callback_data="select_plan_pro_plus"),
+            InlineKeyboardButton("👑 Extra Pro ($225/mo)", callback_data="select_plan_extra_pro")
         ],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
     ])
 
-def get_deployment_type_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🐳 Deploy with Dockerfile", callback_data="deploy_mode_docker")],
-        [InlineKeyboardButton("🛠 Standard Deploy (Build/Start)", callback_data="deploy_mode_standard")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
-    ])
-
-def get_service_type_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🌐 Web Service", callback_data="srvtype_web_service"),
-            InlineKeyboardButton("⚙️ Worker", callback_data="srvtype_background_worker")
-        ],
-        [
-            InlineKeyboardButton("⏱ Cron Job", callback_data="srvtype_cron_job"),
-            InlineKeyboardButton("📄 Static Site", callback_data="srvtype_static_site")
-        ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
-    ])
+# --- Entry Commands ---
 
 @Client.on_message(filters.command("deploy") & auth_filter)
 async def deploy_command(client: Client, message: Message):
@@ -52,15 +93,18 @@ async def deploy_command(client: Client, message: Message):
         await message.reply_text(error_msg, reply_markup=keyboard)
         return
 
-    DEPLOY_SESSIONS[user_id] = {"step": "SELECT_MODE", "env_vars": {}}
+    DEPLOY_SESSIONS[user_id] = {
+        "step": "AWAIT_SERVICE_NAME",
+        "env_vars": {},
+        "type": "web_service"
+    }
 
     await message.reply_text(
-        "🚀 <b>New Deployment</b>\n\n"
-        "Choose deployment method:\n\n"
-        "• <b>🐳 Deploy with Dockerfile:</b> Uses repository Dockerfile. "
-        "<b>Will NOT ask for Build/Start commands.</b>\n"
-        "• <b>🛠 Standard Deploy:</b> Build Command + Start Command.",
-        reply_markup=get_deployment_type_keyboard()
+        "🚀 <b>New Render Deployment</b>\n\n"
+        "<b>Step 1/7: Service Name</b>\n"
+        "Please enter a unique Service Name for your deployment:\n"
+        "<i>Example: my-web-app</i>",
+        reply_markup=get_cancel_keyboard()
     )
 
 @Client.on_callback_query(filters.regex("^start_deploy$") & auth_filter)
@@ -71,275 +115,95 @@ async def start_deploy_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.edit_text(error_msg, reply_markup=keyboard)
         return
 
-    DEPLOY_SESSIONS[user_id] = {"step": "SELECT_MODE", "env_vars": {}}
+    DEPLOY_SESSIONS[user_id] = {
+        "step": "AWAIT_SERVICE_NAME",
+        "env_vars": {},
+        "type": "web_service"
+    }
     await callback_query.message.edit_text(
-        "🚀 <b>New Deployment</b>\n\n"
-        "Choose deployment method:\n\n"
-        "• <b>🐳 Deploy with Dockerfile:</b> Uses repository Dockerfile. "
-        "<b>Will NOT ask for Build/Start commands.</b>\n"
-        "• <b>🛠 Standard Deploy:</b> Build Command + Start Command.",
-        reply_markup=get_deployment_type_keyboard()
+        "🚀 <b>New Render Deployment</b>\n\n"
+        "<b>Step 1/7: Service Name</b>\n"
+        "Please enter a unique Service Name for your deployment:\n"
+        "<i>Example: my-web-app</i>",
+        reply_markup=get_cancel_keyboard()
     )
 
-@Client.on_callback_query(filters.regex("^deploy_mode_(docker|standard)$") & auth_filter)
-async def deploy_mode_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    mode = callback_query.matches[0].group(1)
+# --- Step Helper Functions ---
 
-    session = DEPLOY_SESSIONS.get(user_id, {})
-    session["is_docker"] = (mode == "docker")
+async def prompt_step_2_repository(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None):
     session["step"] = "AWAIT_REPO"
     DEPLOY_SESSIONS[user_id] = session
 
-    mode_title = "🐳 Dockerfile Deployment" if session["is_docker"] else "🛠 Standard Deployment"
-    await callback_query.message.edit_text(
-        f"<b>{mode_title}</b>\n\n"
-        "Please send GitHub Owner / Repo URL or GitHub Username:\n"
-        "<i>Examples: https://github.com/owner/repository OR owner/repository OR owner_username</i>",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
-        ])
+    text = (
+        f"✅ <b>Service Name:</b> <code>{session['name']}</code>\n\n"
+        "<b>Step 2/7: Repository</b>\n"
+        "Please send the GitHub repository URL or Owner/Repo:\n"
+        "<i>Examples: https://github.com/owner/repository OR owner/repository</i>"
     )
+    kb = get_cancel_keyboard()
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=kb)
+    else:
+        await client.send_message(chat_id, text, reply_markup=kb)
 
-@Client.on_callback_query(filters.regex("^srvtype_(web_service|background_worker|cron_job|static_site)$") & auth_filter)
-async def service_type_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    srv_type = callback_query.matches[0].group(1)
-
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        await callback_query.message.edit_text("❌ Session expired. Please run /deploy again.")
-        return
-
-    session["type"] = srv_type
-    session["step"] = "SELECT_PLAN"
+async def prompt_step_3_runtime(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None):
+    session["step"] = "AWAIT_RUNTIME"
     DEPLOY_SESSIONS[user_id] = session
 
-    await callback_query.message.edit_text(
-        f"<b>Service Type Selected:</b> {srv_type}\n\n"
-        "Please select your Render instance plan:",
-        reply_markup=get_plan_keyboard()
+    text = (
+        f"✅ <b>Repository:</b> <code>{session['owner']}/{session['repo_name']}</code>\n\n"
+        "<b>Step 3/7: Language / Runtime</b>\n"
+        "Select the runtime for your application:"
     )
-
-@Client.on_callback_query(filters.regex("^select_plan_(free|starter)$") & auth_filter)
-async def select_plan_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    plan_choice = callback_query.matches[0].group(1)
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        await callback_query.message.edit_text("❌ Session expired. Please run /deploy again.")
-        return
-
-    session["instance_type"] = plan_choice
-    session["step"] = "AWAIT_SERVICE_NAME"
-    DEPLOY_SESSIONS[user_id] = session
-
-    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
-
-    await callback_query.message.edit_text(
-        f"<b>Instance Plan Selected:</b> {plan_choice.upper()}\n\n"
-        f"Please enter a unique Service Name, or click Skip to use default (<code>{default_name}</code>):",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"Skip (Default: {default_name})", callback_data="skip_service_name")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
-        ])
-    )
-
-@Client.on_callback_query(filters.regex("^skip_service_name$") & auth_filter)
-async def skip_service_name_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        await callback_query.message.edit_text("❌ Session expired. Please run /deploy again.")
-        return
-
-    default_name = sanitize_service_name(session.get("repo_name", "my-app"))
-    session["name"] = default_name
-
-    if session.get("is_docker"):
-        session["step"] = "AWAIT_ENV_VARS"
-        await callback_query.message.edit_text(
-            f"✅ Service Name: <code>{default_name}</code>\n\n"
-            "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
-            "Or click 'Skip Env Vars' to proceed.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")]
-            ])
-        )
+    kb = get_runtime_keyboard()
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=kb)
     else:
-        session["step"] = "AWAIT_BUILD_COMMAND"
-        await callback_query.message.edit_text(
-            f"✅ Service Name: <code>{default_name}</code>\n\n"
-            "Please enter the Build Command:\n"
-            "<i>Example: pip install -r requirements.txt</i>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Skip / None", callback_data="skip_build_cmd")]
-            ])
-        )
+        await client.send_message(chat_id, text, reply_markup=kb)
 
-ALL_COMMANDS = [
-    "start", "help", "deploy", "create_repo", "zip", "repo_upload", "repos",
-    "projects", "status", "logs", "restart", "redeploy", "redeploy_all",
-    "stop", "delete", "env", "env_converter", "delete_branches", "settings"
-]
-
-@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter)
-async def wizard_text_input_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        message.continue_propagation()
-        return
-
-    step = session.get("step")
-    text = message.text.strip()
-    gh_token = await db.get_user_github_token(user_id)
-
-    if step == "AWAIT_REPO":
-        parsed = DockerInspector.parse_github_url(text)
-        if parsed:
-            owner, repo_name = parsed
-            session["repo"] = f"https://github.com/{owner}/{repo_name}"
-            session["owner"] = owner
-            session["repo_name"] = repo_name
-            await fetch_and_show_branches(client, message.chat.id, user_id, session, page=0)
-        else:
-            owner = text.lstrip("@").strip()
-            msg = await message.reply_text(f"🔍 Fetching repositories for <code>{owner}</code>...")
-            repos = await DockerInspector.fetch_user_repos(owner, github_token=gh_token)
-            if not repos:
-                await msg.edit_text("❌ No repositories found or invalid URL. Please send full repo URL or connect GitHub PAT in /settings.")
-                return
-
-            session["owner"] = owner
-            session["user_repos"] = repos
-            buttons = []
-            for r in repos[:15]:
-                label = f"🔒 {r['name']}" if r.get('private') else f"📦 {r['name']}"
-                buttons.append([InlineKeyboardButton(label, callback_data=f"select_user_repo_{r['name']}")])
-            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
-            await msg.edit_text("📦 <b>Available Repositories:</b>\nSelect a repository to deploy:", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif step == "AWAIT_SERVICE_NAME":
-        sanitized_name = sanitize_service_name(text, fallback=session.get("repo_name", "my-app"))
-        session["name"] = sanitized_name
-
-        if session.get("is_docker"):
-            session["step"] = "AWAIT_ENV_VARS"
-            await message.reply_text(
-                f"✅ Service Name: <code>{sanitized_name}</code>\n\n"
-                "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
-                "Or click 'Skip Env Vars' to proceed.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")]
-                ])
-            )
-        else:
-            session["step"] = "AWAIT_BUILD_COMMAND"
-            await message.reply_text(
-                f"✅ Service Name: <code>{sanitized_name}</code>\n\n"
-                "Please enter the Build Command:\n"
-                "<i>Example: pip install -r requirements.txt</i>",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Skip / None", callback_data="skip_build_cmd")]
-                ])
-            )
-
-    elif step == "AWAIT_BUILD_COMMAND":
-        session["buildCommand"] = text
-        session["step"] = "AWAIT_START_COMMAND"
-        await message.reply_text(
-            "Please enter the Start Command:\n"
-            "<i>Example: python -m bot</i>"
-        )
-
-    elif step == "AWAIT_START_COMMAND":
-        session["startCommand"] = text
-        session["step"] = "AWAIT_ENV_VARS"
-        await message.reply_text(
-            "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
-            "Or click 'Skip Env Vars' to proceed.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")]
-            ])
-        )
-
-    elif step == "AWAIT_ENV_VARS":
-        parsed_vars = parse_env_input(text)
-        session["env_vars"].update(parsed_vars)
-        session["step"] = "CONFIRMATION"
-        DEPLOY_SESSIONS[user_id] = session
-        await show_deployment_preview(client, message.chat.id, user_id)
-
-@Client.on_callback_query(filters.regex("^select_user_repo_(.+)$") & auth_filter)
-async def select_user_repo_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    repo_name = callback_query.matches[0].group(1).strip()
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-
-    owner = session.get("owner", "user")
-    repo_obj = None
-    for r in session.get("user_repos", []):
-        if r.get("name") == repo_name:
-            repo_obj = r
-            break
-
-    if repo_obj and repo_obj.get("html_url"):
-        session["repo"] = repo_obj["html_url"]
-        if "/" in repo_obj.get("full_name", ""):
-            session["owner"] = repo_obj["full_name"].split("/")[0]
-    else:
-        session["repo"] = f"https://github.com/{owner}/{repo_name}"
-
-    session["repo_name"] = repo_name
-    await callback_query.message.edit_text(f"✅ Repository selected: <code>{session.get('owner')}/{repo_name}</code>")
-    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session, page=0)
-
-@Client.on_callback_query(filters.regex("^select_branch_page_(\\d+)$") & auth_filter)
-async def branch_page_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    page = int(callback_query.matches[0].group(1))
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-    await fetch_and_show_branches(client, callback_query.message.chat.id, user_id, session, page=page, message_to_edit=callback_query.message)
-
-async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], page: int = 0, message_to_edit: Message = None):
+async def prompt_step_4_branch(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None, page: int = 0):
     owner = session["owner"]
     repo_name = session["repo_name"]
-    session["step"] = "AWAIT_BRANCH_SELECT"
     gh_token = await db.get_user_github_token(user_id)
 
     branches = session.get("fetched_branches")
     if branches is None:
         if message_to_edit:
-            await message_to_edit.edit_text(f"🌿 Fetching all branches for <code>{owner}/{repo_name}</code>...")
+            await message_to_edit.edit_text(f"🌿 Fetching branches for <code>{owner}/{repo_name}</code>...")
         else:
-            msg = await client.send_message(chat_id, f"🌿 Fetching all branches for <code>{owner}/{repo_name}</code>...")
+            msg = await client.send_message(chat_id, f"🌿 Fetching branches for <code>{owner}/{repo_name}</code>...")
             message_to_edit = msg
 
         branches = await DockerInspector.fetch_repo_branches(owner, repo_name, github_token=gh_token)
         session["fetched_branches"] = branches
         DEPLOY_SESSIONS[user_id] = session
 
-    if not branches:
-        session["branch"] = "main"
-        await proceed_after_branch(client, chat_id, user_id, session)
-        return
-
+    # Step 4 Rule: If 1 branch, automatically select it without asking user
     if len(branches) == 1:
         selected_b = branches[0]
         session["branch"] = selected_b
         DEPLOY_SESSIONS[user_id] = session
-        text = f"✅ <b>Auto-selected Branch:</b> <code>{selected_b}</code>"
+        info_text = f"✅ <b>Branch:</b> Single branch detected: <code>{selected_b}</code> (auto-selected)."
         if message_to_edit:
-            await message_to_edit.edit_text(text)
+            await message_to_edit.edit_text(info_text)
         else:
-            await client.send_message(chat_id, text)
-        await proceed_after_branch(client, chat_id, user_id, session)
+            await client.send_message(chat_id, info_text)
+        await prompt_step_5_region(client, chat_id, user_id, session)
         return
+
+    if not branches:
+        session["branch"] = "main"
+        DEPLOY_SESSIONS[user_id] = session
+        info_text = "⚠️ Could not fetch branches. Defaulting to <code>main</code> branch."
+        if message_to_edit:
+            await message_to_edit.edit_text(info_text)
+        else:
+            await client.send_message(chat_id, info_text)
+        await prompt_step_5_region(client, chat_id, user_id, session)
+        return
+
+    session["step"] = "AWAIT_BRANCH"
+    DEPLOY_SESSIONS[user_id] = session
 
     PAGE_SIZE = 8
     total_branches = len(branches)
@@ -371,20 +235,152 @@ async def fetch_and_show_branches(client: Client, chat_id: int, user_id: int, se
     buttons.append(nav_row)
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
 
-    text = f"🌿 <b>Available Branches for {owner}/{repo_name} ({total_branches} Total):</b>\nSelect a branch to deploy:"
+    text = f"<b>Step 4/7: Branch</b>\nAvailable branches for <code>{owner}/{repo_name}</code> ({total_branches} Total):\nSelect a branch:"
 
     if message_to_edit:
         await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     else:
         await client.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(buttons))
 
+async def prompt_step_5_region(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None):
+    session["step"] = "AWAIT_REGION"
+    DEPLOY_SESSIONS[user_id] = session
+
+    text = (
+        f"✅ <b>Branch Selected:</b> <code>{session.get('branch', 'main')}</code>\n\n"
+        "<b>Step 5/7: Region</b>\n"
+        "Select the Render deployment region:"
+    )
+    kb = get_region_keyboard()
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=kb)
+    else:
+        await client.send_message(chat_id, text, reply_markup=kb)
+
+async def prompt_step_6_plan(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None):
+    session["step"] = "AWAIT_PLAN"
+    DEPLOY_SESSIONS[user_id] = session
+
+    text = (
+        f"✅ <b>Region Selected:</b> <code>{session.get('region', 'oregon')}</code>\n\n"
+        "<b>Step 6/7: Compute Plan</b>\n"
+        "Select your compute plan / instance type (all options shown below):"
+    )
+    kb = get_plan_keyboard()
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=kb)
+    else:
+        await client.send_message(chat_id, text, reply_markup=kb)
+
+async def prompt_step_7_env_vars(client: Client, chat_id: int, user_id: int, session: Dict[str, Any], message_to_edit: Message = None):
+    session["step"] = "AWAIT_ENV_VARS"
+    DEPLOY_SESSIONS[user_id] = session
+
+    text = (
+        f"✅ <b>Plan Selected:</b> <code>{session.get('plan', 'free').upper()}</code>\n\n"
+        "<b>Step 7/7: Environment Variables</b>\n"
+        "Enter Environment Variables in <code>KEY=value</code> format (one per line).\n"
+        "Or click 'Skip Env Vars' to proceed."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+    ])
+    if message_to_edit:
+        await message_to_edit.edit_text(text, reply_markup=kb)
+    else:
+        await client.send_message(chat_id, text, reply_markup=kb)
+
+# --- Callbacks ---
+
+@Client.on_callback_query(filters.regex("^select_runtime_(docker|python|node|go|ruby|rust|elixir|static)$") & auth_filter)
+async def select_runtime_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    runtime = callback_query.matches[0].group(1)
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_RUNTIME":
+        await callback_query.answer("Invalid or expired step.", show_alert=True)
+        return
+
+    session["env"] = runtime
+    if runtime == "docker":
+        session["is_docker"] = True
+        session["dockerfilePath"] = "./Dockerfile"
+        session["dockerContext"] = "."
+        await callback_query.message.edit_text(f"✅ Runtime: <code>Docker</code>")
+        await prompt_step_4_branch(client, callback_query.message.chat.id, user_id, session)
+    elif runtime == "static":
+        session["is_docker"] = False
+        session["type"] = "static_site"
+        session["step"] = "AWAIT_BUILD_COMMAND"
+        DEPLOY_SESSIONS[user_id] = session
+        await callback_query.message.edit_text(
+            "✅ Runtime: <code>Static Site</code>\n\n"
+            "Please enter the Build Command (e.g. <code>npm run build</code>) or click Skip:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip / None", callback_data="skip_build_cmd")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+            ])
+        )
+    else:
+        session["is_docker"] = False
+        session["step"] = "AWAIT_BUILD_COMMAND"
+        DEPLOY_SESSIONS[user_id] = session
+        await callback_query.message.edit_text(
+            f"✅ Runtime: <code>{runtime.title()}</code>\n\n"
+            f"Please enter the Build Command (e.g. <code>pip install -r requirements.txt</code> or <code>npm install</code>) or click Skip:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip / None", callback_data="skip_build_cmd")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+            ])
+        )
+
+@Client.on_callback_query(filters.regex("^skip_build_cmd$") & auth_filter)
+async def skip_build_cmd_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_BUILD_COMMAND":
+        await callback_query.answer("Invalid or expired step.", show_alert=True)
+        return
+
+    session["buildCommand"] = ""
+    session["step"] = "AWAIT_START_COMMAND"
+    DEPLOY_SESSIONS[user_id] = session
+    await callback_query.message.edit_text(
+        "Please enter the Start Command (e.g. <code>python -m bot</code> or <code>npm start</code>) or click Skip:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Skip / None", callback_data="skip_start_cmd")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+        ])
+    )
+
+@Client.on_callback_query(filters.regex("^skip_start_cmd$") & auth_filter)
+async def skip_start_cmd_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_START_COMMAND":
+        await callback_query.answer("Invalid or expired step.", show_alert=True)
+        return
+
+    session["startCommand"] = ""
+    await prompt_step_4_branch(client, callback_query.message.chat.id, user_id, session, message_to_edit=callback_query.message)
+
+@Client.on_callback_query(filters.regex("^select_branch_page_(\\d+)$") & auth_filter)
+async def branch_page_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    page = int(callback_query.matches[0].group(1))
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session:
+        return
+    await prompt_step_4_branch(client, callback_query.message.chat.id, user_id, session, message_to_edit=callback_query.message, page=page)
+
 @Client.on_callback_query(filters.regex("^select_branch_idx_(\\d+)$") & auth_filter)
 async def select_branch_idx_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     idx = int(callback_query.matches[0].group(1))
     session = DEPLOY_SESSIONS.get(user_id)
-    if not session or "fetched_branches" not in session:
-        await callback_query.answer("Session expired.", show_alert=True)
+    if not session or session.get("step") != "AWAIT_BRANCH":
+        await callback_query.answer("Session expired or invalid step.", show_alert=True)
         return
 
     branches = session.get("fetched_branches", [])
@@ -395,178 +391,144 @@ async def select_branch_idx_callback(client: Client, callback_query: CallbackQue
     branch = branches[idx]
     session["branch"] = branch
     await callback_query.message.edit_text(f"✅ Selected Branch: <code>{branch}</code>")
-    await proceed_after_branch(client, callback_query.message.chat.id, user_id, session)
+    await prompt_step_5_region(client, callback_query.message.chat.id, user_id, session)
 
-async def proceed_after_branch(client: Client, chat_id: int, user_id: int, session: Dict[str, Any]):
-    owner = session["owner"]
-    repo_name = session["repo_name"]
-    branch = session.get("branch", "main")
+@Client.on_callback_query(filters.regex("^select_region_(oregon|frankfurt|singapore|ohio|virginia)$") & auth_filter)
+async def select_region_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    region = callback_query.matches[0].group(1)
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_REGION":
+        await callback_query.answer("Session expired or invalid step.", show_alert=True)
+        return
+
+    session["region"] = region
+    await callback_query.message.edit_text(f"✅ Region: <code>{region}</code>")
+    await prompt_step_6_plan(client, callback_query.message.chat.id, user_id, session)
+
+@Client.on_callback_query(filters.regex("^select_plan_(free|starter|standard|pro|pro_plus|extra_pro)$") & auth_filter)
+async def select_plan_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    plan_choice = callback_query.matches[0].group(1)
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_PLAN":
+        await callback_query.answer("Session expired or invalid step.", show_alert=True)
+        return
+
+    session["plan"] = plan_choice
+    session["instance_type"] = plan_choice
+    await callback_query.message.edit_text(f"✅ Compute Plan: <code>{plan_choice.upper()}</code>")
+    await prompt_step_7_env_vars(client, callback_query.message.chat.id, user_id, session)
+
+@Client.on_callback_query(filters.regex("^skip_env_vars$") & auth_filter)
+async def skip_env_vars_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session or session.get("step") != "AWAIT_ENV_VARS":
+        await callback_query.answer("Session expired or invalid step.", show_alert=True)
+        return
+
+    session["step"] = "CONFIRMATION"
+    DEPLOY_SESSIONS[user_id] = session
+    await show_deployment_preview(client, callback_query.message.chat.id, user_id)
+
+@Client.on_callback_query(filters.regex("^cancel_deploy$") & auth_filter)
+async def cancel_deploy_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    DEPLOY_SESSIONS.pop(user_id, None)
+    await callback_query.message.edit_text("❌ Deployment canceled.")
+
+# --- Text Handlers ---
+
+@Client.on_message(filters.text & ~filters.command(ALL_COMMANDS) & auth_filter)
+async def wizard_text_input_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    session = DEPLOY_SESSIONS.get(user_id)
+    if not session:
+        message.continue_propagation()
+        return
+
+    step = session.get("step")
+    text = message.text.strip()
     gh_token = await db.get_user_github_token(user_id)
 
-    if session.get("is_docker"):
-        status_msg = await client.send_message(chat_id, "🔍 Inspecting repository for Dockerfile...")
-        detected = await DockerInspector.detect_dockerfiles(owner, repo_name, branch, github_token=gh_token)
+    # Step 1 Validation
+    if step == "AWAIT_SERVICE_NAME":
+        if not text or len(text) < 2:
+            await message.reply_text(
+                "❌ <b>Invalid Service Name</b>\n"
+                "Please enter a valid service name containing at least 2 characters (alphanumeric and hyphens).",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
 
-        if not detected:
-            await status_msg.edit_text(
-                "❌ <b>Dockerfile not found</b> in repository.\n\n"
-                "You can generate a production Dockerfile or check the repo.",
+        sanitized_name = sanitize_service_name(text)
+        if not sanitized_name:
+            await message.reply_text(
+                "❌ <b>Invalid Service Name Format</b>\n"
+                "Service name must contain alphanumeric characters or hyphens.",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+
+        session["name"] = sanitized_name
+        await prompt_step_2_repository(client, message.chat.id, user_id, session)
+
+    # Step 2 Validation
+    elif step == "AWAIT_REPO":
+        parsed = DockerInspector.parse_github_url(text)
+        if not parsed:
+            await message.reply_text(
+                "❌ <b>Invalid Repository URL or Format</b>\n"
+                "Please send a valid GitHub URL or Owner/Repo pair.\n"
+                "<i>Example: https://github.com/owner/repo OR owner/repo</i>",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
+
+        owner, repo_name = parsed
+        session["repo"] = f"https://github.com/{owner}/{repo_name}"
+        session["owner"] = owner
+        session["repo_name"] = repo_name
+
+        await prompt_step_3_runtime(client, message.chat.id, user_id, session)
+
+    elif step == "AWAIT_BUILD_COMMAND":
+        session["buildCommand"] = text
+        session["step"] = "AWAIT_START_COMMAND"
+        DEPLOY_SESSIONS[user_id] = session
+        await message.reply_text(
+            "Please enter the Start Command (e.g. <code>python -m bot</code> or <code>npm start</code>) or click Skip:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Skip / None", callback_data="skip_start_cmd")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
+            ])
+        )
+
+    elif step == "AWAIT_START_COMMAND":
+        session["startCommand"] = text
+        await prompt_step_4_branch(client, message.chat.id, user_id, session)
+
+    # Step 7 Validation
+    elif step == "AWAIT_ENV_VARS":
+        parsed_vars = parse_env_input(text)
+        if not parsed_vars and "=" in text:
+            await message.reply_text(
+                "⚠️ <b>Environment Variable Format Error</b>\n"
+                "Please format variables as <code>KEY=value</code> (one per line).",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🛠 Generate Dockerfile", callback_data="generate_dockerfile")],
+                    [InlineKeyboardButton("Skip Env Vars ➡️", callback_data="skip_env_vars")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")]
                 ])
             )
             return
 
-        if len(detected) == 1:
-            session["dockerfilePath"] = detected[0]
-            session["dockerContext"] = "."
-            await status_msg.edit_text(
-                f"✅ Detected Dockerfile: <code>{detected[0]}</code>",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔍 Check Dockerfile", callback_data="check_dockerfile")],
-                    [InlineKeyboardButton("➡️ Continue to Service Type", callback_data="proceed_service_type")]
-                ])
-            )
-        else:
-            buttons = [[InlineKeyboardButton(df, callback_data=f"select_df_{idx}")] for idx, df in enumerate(detected)]
-            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_deploy")])
-            session["detected_dockerfiles"] = detected
-            await status_msg.edit_text(
-                "🐳 <b>Multiple Dockerfiles detected:</b>\nPlease select one:",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-    else:
-        session["step"] = "SELECT_SERVICE_TYPE"
-        await client.send_message(
-            chat_id,
-            "Select Service Type:",
-            reply_markup=get_service_type_keyboard()
-        )
-
-@Client.on_callback_query(filters.regex("^select_df_(\\d+)$") & auth_filter)
-async def select_dockerfile_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    idx = int(callback_query.matches[0].group(1))
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session or "detected_dockerfiles" not in session:
-        return
-    df_path = session["detected_dockerfiles"][idx]
-    session["dockerfilePath"] = df_path
-    session["dockerContext"] = "."
-    await callback_query.message.edit_text(
-        f"✅ Selected Dockerfile: <code>{df_path}</code>",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔍 Check Dockerfile", callback_data="check_dockerfile")],
-            [InlineKeyboardButton("➡️ Continue to Service Type", callback_data="proceed_service_type")]
-        ])
-    )
-
-@Client.on_callback_query(filters.regex("^check_dockerfile$") & auth_filter)
-async def check_dockerfile_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-
-    df_path = session.get("dockerfilePath", "Dockerfile")
-    gh_token = await db.get_user_github_token(user_id)
-    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path, github_token=gh_token)
-
-    if content is None:
-        await callback_query.message.edit_text("❌ Failed to fetch Dockerfile content from GitHub.")
-        return
-
-    res = DockerInspector.validate_dockerfile(content)
-    text = f"🔍 <b>Dockerfile Validation Result:</b>\n\n"
-    if res.is_valid:
-        text += "✅ <b>Status:</b> Valid Dockerfile syntax\n"
-    else:
-        text += "❌ <b>Status:</b> Invalid / Issues Found\n"
-
-    if res.errors:
-        text += "\n<b>Errors:</b>\n" + "\n".join([f"• {e}" for e in res.errors])
-    if res.warnings:
-        text += "\n<b>Warnings:</b>\n" + "\n".join([f"• {w}" for w in res.warnings])
-
-    await callback_query.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛠 Fix Dockerfile", callback_data="fix_dockerfile")],
-            [InlineKeyboardButton("➡️ Proceed to Service Type", callback_data="proceed_service_type")]
-        ])
-    )
-
-@Client.on_callback_query(filters.regex("^fix_dockerfile$") & auth_filter)
-async def fix_dockerfile_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-
-    df_path = session.get("dockerfilePath", "Dockerfile")
-    gh_token = await db.get_user_github_token(user_id)
-    content = await DockerInspector.fetch_repo_file(session["owner"], session["repo_name"], session.get("branch", "main"), df_path, github_token=gh_token) or ""
-    fixed_content, diff_text = DockerInspector.fix_dockerfile(content, project_type="python")
-
-    await callback_query.message.edit_text(
-        f"🛠 <b>Dockerfile Auto-Fix Preview (Diff):</b>\n\n"
-        f"<code>{diff_text}</code>\n\n"
-        f"<i>Preserving project logic while resolving Docker constraints.</i>",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Proceed with Fixed Setup", callback_data="proceed_service_type")]
-        ])
-    )
-
-@Client.on_callback_query(filters.regex("^generate_dockerfile$") & auth_filter)
-async def generate_dockerfile_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-
-    template = DockerInspector.generate_dockerfile_template("python")
-    session["dockerfilePath"] = "./Dockerfile"
-    session["dockerContext"] = "."
-
-    await callback_query.message.edit_text(
-        f"🛠 <b>Generated Production Dockerfile:</b>\n\n"
-        f"<code>{template}</code>\n\n"
-        f"Render will use this Dockerfile template for deployment.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Continue to Service Type", callback_data="proceed_service_type")]
-        ])
-    )
-
-@Client.on_callback_query(filters.regex("^proceed_service_type$") & auth_filter)
-async def proceed_service_type_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-    session["step"] = "SELECT_SERVICE_TYPE"
-    await callback_query.message.edit_text(
-        "Select Service Type:",
-        reply_markup=get_service_type_keyboard()
-    )
-
-@Client.on_callback_query(filters.regex("^(skip_build_cmd|skip_env_vars)$") & auth_filter)
-async def skip_step_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    action = callback_query.matches[0].group(1)
-    session = DEPLOY_SESSIONS.get(user_id)
-    if not session:
-        return
-
-    if action == "skip_build_cmd":
-        session["buildCommand"] = ""
-        session["step"] = "AWAIT_START_COMMAND"
-        await callback_query.message.edit_text(
-            "Please enter the Start Command:\n<i>Example: python -m bot</i>"
-        )
-    elif action == "skip_env_vars":
+        session["env_vars"].update(parsed_vars)
         session["step"] = "CONFIRMATION"
-        await show_deployment_preview(client, callback_query.message.chat.id, user_id)
+        DEPLOY_SESSIONS[user_id] = session
+        await show_deployment_preview(client, message.chat.id, user_id)
+
+# --- Step 8 & Step 9: Confirmation & Trigger Deployment ---
 
 async def show_deployment_preview(client: Client, chat_id: int, user_id: int):
     session = DEPLOY_SESSIONS.get(user_id)
@@ -594,8 +556,15 @@ async def confirm_deploy_callback(client: Client, callback_query: CallbackQuery)
         return
 
     api_key = await db.get_user_render_key(user_id)
-    render = RenderAPI(api_key)
+    if not api_key:
+        await callback_query.message.edit_text(
+            "🔑 <b>Render API Key Required</b>\n\n"
+            "Please configure your Render API key in /settings before deploying.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")]])
+        )
+        return
 
+    render = RenderAPI(api_key)
     msg = await callback_query.message.edit_text("⏳ <b>Creating service on Render...</b>")
 
     try:
@@ -622,8 +591,9 @@ async def confirm_deploy_callback(client: Client, callback_query: CallbackQuery)
 
         text = (
             f"✅ <b>Deployment Triggered Successfully!</b>\n\n"
-            f"<b>Service:</b> {srv_name}\n"
-            f"<b>ID:</b> <code>{srv_id}</code>\n"
+            f"<b>Service Name:</b> {srv_name}\n"
+            f"<b>Service ID:</b> <code>{srv_id}</code>\n"
+            f"<b>Status:</b> {get_status_badge('created')}\n"
         )
         if srv_url:
             text += f"<b>URL:</b> {srv_url}\n"
@@ -639,16 +609,15 @@ async def confirm_deploy_callback(client: Client, callback_query: CallbackQuery)
             ])
         )
     except RenderAPIError as e:
-        err_msg = f"❌ <b>Deployment Failed:</b> {e.message}"
-        if "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
-            err_msg += "\n\n💡 <b>Tip:</b> Render may require a valid payment method on file in your account to spin up services or non-free instance types. Visit https://dashboard.render.com/billing to add a card or verify your billing details."
-        await msg.edit_text(err_msg)
+        err_msg = f"❌ <b>Deployment Failed (API Error {e.status}):</b> {e.message}"
+        if e.status == 402 or "payment" in e.message.lower() or "card" in e.message.lower() or "billing" in e.message.lower():
+            plan_name = str(session.get("plan", "free")).upper()
+            err_msg += (
+                f"\n\n💡 <b>Why did this happen?</b>\n"
+                f"Even though you selected the <b>{plan_name}</b> plan ($0/mo), Render requires a valid credit/debit card on file for account identity verification or when workspace free resource limits have been reached.\n\n"
+                f"👉 <b>To fix this:</b> Add a payment method at <a href='https://dashboard.render.com/billing'>https://dashboard.render.com/billing</a> and try deploying again."
+            )
+        await msg.edit_text(err_msg, disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error creating service: {e}")
         await msg.edit_text(f"❌ <b>Error:</b> {str(e)}")
-
-@Client.on_callback_query(filters.regex("^cancel_deploy$") & auth_filter)
-async def cancel_deploy_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    DEPLOY_SESSIONS.pop(user_id, None)
-    await callback_query.message.edit_text("❌ Deployment canceled.")
